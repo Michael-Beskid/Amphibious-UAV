@@ -14,43 +14,11 @@ int ppm_counter = 0;
 unsigned long time_ms = 0;
 
 void radioSetup() {
-  //PPM Receiver 
-  #if defined USE_PPM_RX
-    //Declare interrupt pin
-    pinMode(PPM_Pin, INPUT_PULLUP);
-    delay(20);
-    //Attach interrupt and point to corresponding ISR function
-    attachInterrupt(digitalPinToInterrupt(PPM_Pin), getPPM, CHANGE);
-
-  //PWM Receiver
-  #elif defined USE_PWM_RX
-    //Declare interrupt pins 
-    pinMode(ch1Pin, INPUT_PULLUP);
-    pinMode(ch2Pin, INPUT_PULLUP);
-    pinMode(ch3Pin, INPUT_PULLUP);
-    pinMode(ch4Pin, INPUT_PULLUP);
-    pinMode(ch5Pin, INPUT_PULLUP);
-    pinMode(ch6Pin, INPUT_PULLUP);
-    delay(20);
-    //Attach interrupt and point to corresponding ISR functions
-    attachInterrupt(digitalPinToInterrupt(ch1Pin), getCh1, CHANGE);
-    attachInterrupt(digitalPinToInterrupt(ch2Pin), getCh2, CHANGE);
-    attachInterrupt(digitalPinToInterrupt(ch3Pin), getCh3, CHANGE);
-    attachInterrupt(digitalPinToInterrupt(ch4Pin), getCh4, CHANGE);
-    attachInterrupt(digitalPinToInterrupt(ch5Pin), getCh5, CHANGE);
-    attachInterrupt(digitalPinToInterrupt(ch6Pin), getCh6, CHANGE);
-    delay(20);
-
-  //SBUS Recevier 
-  #elif defined USE_SBUS_RX
-    sbus.begin();
-
-  //DSM receiver
-  #elif defined USE_DSM_RX
-    Serial3.begin(115000);
-  #else
-    #error No RX type defined...
-  #endif
+  //Declare interrupt pin
+  pinMode(PPM_Pin, INPUT_PULLUP);
+  delay(20);
+  //Attach interrupt and point to corresponding ISR function
+  attachInterrupt(digitalPinToInterrupt(PPM_Pin), getPPM, CHANGE);
 }
 
 unsigned long getRadioPWM(int ch_num) {
@@ -79,24 +47,7 @@ unsigned long getRadioPWM(int ch_num) {
   return returnPWM;
 }
 
-//For DSM type receivers
-void serialEvent3(void)
-{
-  #if defined USE_DSM_RX
-    while (Serial3.available()) {
-        DSM.handleSerialEvent(Serial3.read(), micros());
-    }
-  #endif
-}
-
-
-
-//========================================================================================================================//
-
-
-
-//INTERRUPT SERVICE ROUTINES (for reading PWM and PPM)
-
+// INTERRUPT SERVICE ROUTINE (for reading PPM)
 void getPPM() {
   unsigned long dt_ppm;
   int trig = digitalRead(PPM_Pin);
@@ -134,65 +85,5 @@ void getPPM() {
     }
     
     ppm_counter = ppm_counter + 1;
-  }
-}
-
-void getCh1() {
-  int trigger = digitalRead(ch1Pin);
-  if(trigger == 1) {
-    rising_edge_start_1 = micros();
-  }
-  else if(trigger == 0) {
-    channel_1_raw = micros() - rising_edge_start_1;
-  }
-}
-
-void getCh2() {
-  int trigger = digitalRead(ch2Pin);
-  if(trigger == 1) {
-    rising_edge_start_2 = micros();
-  }
-  else if(trigger == 0) {
-    channel_2_raw = micros() - rising_edge_start_2;
-  }
-}
-
-void getCh3() {
-  int trigger = digitalRead(ch3Pin);
-  if(trigger == 1) {
-    rising_edge_start_3 = micros();
-  }
-  else if(trigger == 0) {
-    channel_3_raw = micros() - rising_edge_start_3;
-  }
-}
-
-void getCh4() {
-  int trigger = digitalRead(ch4Pin);
-  if(trigger == 1) {
-    rising_edge_start_4 = micros();
-  }
-  else if(trigger == 0) {
-    channel_4_raw = micros() - rising_edge_start_4;
-  }
-}
-
-void getCh5() {
-  int trigger = digitalRead(ch5Pin);
-  if(trigger == 1) {
-    rising_edge_start_5 = micros();
-  }
-  else if(trigger == 0) {
-    channel_5_raw = micros() - rising_edge_start_5;
-  }
-}
-
-void getCh6() {
-  int trigger = digitalRead(ch6Pin);
-  if(trigger == 1) {
-    rising_edge_start_6 = micros();
-  }
-  else if(trigger == 0) {
-    channel_6_raw = micros() - rising_edge_start_6;
   }
 }

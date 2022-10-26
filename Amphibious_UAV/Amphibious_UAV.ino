@@ -14,9 +14,7 @@
 #include <SPI.h>                      //SPI communication
 #include <PWMServo.h>                 //Commanding any extra actuators, installed with teensyduino installer
 #include "src/MPU6050/MPU6050.h"      // MPU-6050 IMU
-
-// Specify PPM Receiver
-#define USE_PPM_RX
+MPU6050 mpu6050;
 
 // Select gyro full scale range (deg/sec)
 #define GYRO_250DPS //Default
@@ -152,12 +150,12 @@ float B_gyro = 0.1;       //Gyro LP filter paramter, (MPU6050 default: 0.1. MPU9
 float B_mag = 1.0;        //Magnetometer LP filter parameter
 
 //IMU calibration parameters - calibrate IMU using calculate_IMU_error() in the void setup() to get these values, then comment out calculate_IMU_error()
-float AccErrorX = 0.0;
-float AccErrorY = 0.0;
-float AccErrorZ = 0.0;
-float GyroErrorX = 0.0;
-float GyroErrorY= 0.0;
-float GyroErrorZ = 0.0;
+float AccErrorX = 0.13;
+float AccErrorY = -0.03;
+float AccErrorZ = -0.08;
+float GyroErrorX = 3.25;
+float GyroErrorY= -2.57;
+float GyroErrorZ = -0.76;
 
 //Controller parameters (take note of defaults before modifying!): 
 float i_limit = 25.0;     //Integrator saturation level, mostly for safety (default 25.0)
@@ -297,11 +295,6 @@ void loop() {
   commandMotors(); //Sends command pulses to each motor pin using OneShot125 protocol
   servo1.write(s1_command_PWM); //Writes PWM value to servo object
   servo2.write(s2_command_PWM);
-  servo3.write(s3_command_PWM);
-  servo4.write(s4_command_PWM);
-  servo5.write(s5_command_PWM);
-  servo6.write(s6_command_PWM);
-  servo7.write(s7_command_PWM);
     
   // Get vehicle commands for next loop iteration
   getCommands(); //Pulls current available radio commands
@@ -336,7 +329,7 @@ void controlMixer() {
    *channel_6_pwm - free auxillary channel, can be used to toggle things with an 'if' statement
    */
    
-  //Quad mixing - EXAMPLE
+  // Motor mixing
   m1_command_scaled = thro_des - pitch_PID - roll_PID - yaw_PID; //Front right
   m2_command_scaled = thro_des + pitch_PID + roll_PID - yaw_PID; //Back left
   m3_command_scaled = thro_des + pitch_PID - roll_PID + yaw_PID; //Back right
@@ -429,11 +422,8 @@ void calculate_IMU_error() {
   //Read IMU values 12000 times
   int c = 0;
   while (c < 12000) {
-    #if defined USE_MPU6050_I2C
-      mpu6050.getMotion6(&AcX, &AcY, &AcZ, &GyX, &GyY, &GyZ);
-    #elif defined USE_MPU9250_SPI
-      mpu9250.getMotion9(&AcX, &AcY, &AcZ, &GyX, &GyY, &GyZ, &MgX, &MgY, &MgZ);
-    #endif
+    
+    mpu6050.getMotion6(&AcX, &AcY, &AcZ, &GyX, &GyY, &GyZ);
     
     AccX  = AcX / ACCEL_SCALE_FACTOR;
     AccY  = AcY / ACCEL_SCALE_FACTOR;
@@ -915,7 +905,7 @@ void commandMotors() {
   pulseStart = micros();
 
   //Write each motor pin low as correct pulse length is reached
-  while (wentLow < 6 ) { //Keep going until final (6th) pulse is finished, then done
+  while (wentLow < 4 ) { //Keep going until final (4th) pulse is finished, then done
     timer = micros();
     if ((m1_command_PWM <= timer - pulseStart) && (flagM1==0)) {
       digitalWrite(m1Pin, LOW);
@@ -1072,65 +1062,11 @@ void throttleCut() {
     m2_command_PWM = 120;
     m3_command_PWM = 120;
     m4_command_PWM = 120;
-    m5_command_PWM = 120;
-    m6_command_PWM = 120;
     
     //Uncomment if using servo PWM variables to control motor ESCs
     //s1_command_PWM = 0;
     //s2_command_PWM = 0;
-    //s3_command_PWM = 0;
-    //s4_command_PWM = 0;
-    //s5_command_PWM = 0;
-    //s6_command_PWM = 0;
-    //s7_command_PWM = 0;
   }
-}
-
-void calibrateMagnetometer() {
-  #if defined USE_MPU9250_SPI 
-    float success;
-    Serial.println("Beginning magnetometer calibration in");
-    Serial.println("3...");
-    delay(1000);
-    Serial.println("2...");
-    delay(1000);
-    Serial.println("1...");
-    delay(1000);
-    Serial.println("Rotate the IMU about all axes until complete.");
-    Serial.println(" ");
-    success = mpu9250.calibrateMag();
-    if(success) {
-      Serial.println("Calibration Successful!");
-      Serial.println("Please comment out the calibrateMagnetometer() function and copy these values into the code:");
-      Serial.print("float MagErrorX = ");
-      Serial.print(mpu9250.getMagBiasX_uT());
-      Serial.println(";");
-      Serial.print("float MagErrorY = ");
-      Serial.print(mpu9250.getMagBiasY_uT());
-      Serial.println(";");
-      Serial.print("float MagErrorZ = ");
-      Serial.print(mpu9250.getMagBiasZ_uT());
-      Serial.println(";");
-      Serial.print("float MagScaleX = ");
-      Serial.print(mpu9250.getMagScaleFactorX());
-      Serial.println(";");
-      Serial.print("float MagScaleY = ");
-      Serial.print(mpu9250.getMagScaleFactorY());
-      Serial.println(";");
-      Serial.print("float MagScaleZ = ");
-      Serial.print(mpu9250.getMagScaleFactorZ());
-      Serial.println(";");
-      Serial.println(" ");
-      Serial.println("If you are having trouble with your attitude estimate at a new flying location, repeat this process as needed.");
-    }
-    else {
-      Serial.println("Calibration Unsuccessful. Please reset the board and try again.");
-    }
-  
-    while(1); //Halt code so it won't enter main loop until this function commented out
-  #endif
-  Serial.println("Error: MPU9250 not selected. Cannot calibrate non-existent magnetometer.");
-  while(1); //Halt code so it won't enter main loop until this function commented out
 }
 
 void loopRate(int freq) {
