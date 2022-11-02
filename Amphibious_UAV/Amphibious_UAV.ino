@@ -275,6 +275,7 @@ void loop() {
   //printGyroData();      //Prints filtered gyro data direct from IMU (expected: ~ -250 to 250, 0 at rest)
   //printAccelData();     //Prints filtered accelerometer data direct from IMU (expected: ~ -2 to 2; x,y 0 when level, z 1 when level)
   //printRollPitchYaw();  //Prints roll, pitch, and yaw angles in degrees from Madgwick filter (expected: degrees, 0 when level)
+  //printAltitude();      //Prints altitude from ultrasonic rangefinder
   //printPIDoutput();     //Prints computed stabilized PID variables from controller and desired setpoint (expected: ~ -1 to 1)
   //printMotorCommands(); //Prints the values being written to the motors (expected: 120 to 250)
   //printServoCommands(); //Prints the values being written to the servos (expected: 0 to 180)
@@ -992,8 +993,6 @@ void getFlightMode() {
 }
 
 void getUSdata() {
-
-  float prevDistance = USdistance;
   
   do {
      for (int i=0; i<4; i++) {
@@ -1166,6 +1165,14 @@ void printServoCommands() {
     Serial.print(s1_command_PWM);
     Serial.print(F(" s2_command: "));
     Serial.print(s2_command_PWM);
+  }
+}
+
+void printAltitude() {
+  if (current_time - print_counter > 10000) {
+    print_counter = micros();
+    Serial.print(F("Altitude: "));
+    Serial.print(USdistance);
   }
 }
 
