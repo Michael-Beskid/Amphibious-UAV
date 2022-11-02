@@ -10,10 +10,13 @@
 //                                                 LIBRARIES & DEFINES                                                    //                                                                 
 //========================================================================================================================//
 
-#include <Wire.h>                     //I2c communication
-#include <SPI.h>                      //SPI communication
+#include <Wire.h>                     // I2C communication
+#include <SPI.h>                      // SPI communication
+#include <SoftwareSerial.h>           // Serial communication
 #include <PWMServo.h>                 //Commanding any extra actuators, installed with teensyduino installer
 #include "src/MPU6050/MPU6050.h"      // MPU-6050 IMU
+
+SoftwareSerial USSerial(11,10); // RX, TX
 MPU6050 mpu6050;
 
 // Select gyro full scale range (deg/sec)
@@ -114,6 +117,10 @@ float q1 = 0.0f;
 float q2 = 0.0f;
 float q3 = 0.0f;
 
+// Ultrasonic Rangefinder
+unsigned char USdata[4] = {};
+float USdistance;
+
 // Normalized desired state
 float thro_des, roll_des, pitch_des, yaw_des;
 float roll_passthru, pitch_passthru, yaw_passthru;
@@ -129,6 +136,13 @@ int m1_command_PWM, m2_command_PWM, m3_command_PWM, m4_command_PWM;
 float s1_command_scaled, s2_command_scaled, s3_command_scaled, s4_command_scaled, s5_command_scaled, s6_command_scaled, s7_command_scaled;
 int s1_command_PWM, s2_command_PWM, s3_command_PWM, s4_command_PWM, s5_command_PWM, s6_command_PWM, s7_command_PWM;
 
+// Flight Modes Enumeration
+enum flightModes {
+  AUTONOMOUS,
+  MANUAL
+};
+
+enum flightModes flightMode;
 
 
 //========================================================================================================================//
@@ -191,6 +205,7 @@ float Kd_yaw = 0.00015;       //Yaw D-gain (be careful when increasing too high,
 
 void setup() {
   Serial.begin(500000); //USB serial
+  USSerial.begin(9600); 
   delay(500);
   
   // Initialize all pins
@@ -204,6 +219,9 @@ void setup() {
 
   // Set built in LED to turn on to signal startup
   digitalWrite(13, HIGH);
+
+  // Start in manual flight mode
+  flightMode = MANUAL;
 
   delay(5);
 
@@ -274,6 +292,7 @@ void loop() {
 
   // Get vehicle state
   getIMUdata(); //Pulls raw gyro, accelerometer, and magnetometer data from IMU and LP filters to remove noise
+  getUSdata();  //Gets altitude measurement from A0221AU ultrasonic rangefinder
   Madgwick(GyroX, -GyroY, -GyroZ, -AccX, AccY, AccZ, dt); //Updates roll_IMU, pitch_IMU, and yaw_IMU angle estimates (degrees)
 
   // Compute desired state
@@ -290,6 +309,9 @@ void loop() {
 
   // Throttle cut check
   throttleCut(); //Directly sets motor commands to low based on state of ch5
+
+  // Flight mode check
+  getFlightMode();
 
   // Command actuators
   commandMotors(); //Sends command pulses to each motor pin using OneShot125 protocol
@@ -585,6 +607,23 @@ void getDesState() {
    * (rate mode). yaw_des is scaled to be within max yaw in degrees/sec. Also creates roll_passthru, pitch_passthru, and
    * yaw_passthru variables, to be used in commanding motors/servos with direct unstabilized commands in controlMixer().
    */
+
+  switch (flightMode) {
+  case AUTONOMOUS:
+    getDesStateAuto();
+    break;
+  case MANUAL:
+    getDesStateManual();
+    break;
+  default:
+    getDesStateManual();
+    break;
+  }
+
+}
+
+void getDesStateAuto() {
+
   thro_des = (channel_1_pwm - 1000.0)/1000.0; //Between 0 and 1
   roll_des = (channel_2_pwm - 1500.0)/500.0; //Between -1 and 1
   pitch_des = (channel_3_pwm - 1500.0)/500.0; //Between -1 and 1
@@ -601,6 +640,28 @@ void getDesState() {
   roll_passthru = constrain(roll_passthru, -0.5, 0.5);
   pitch_passthru = constrain(pitch_passthru, -0.5, 0.5);
   yaw_passthru = constrain(yaw_passthru, -0.5, 0.5);
+  
+}
+
+void getDesStateManual() {
+  
+  thro_des = (channel_1_pwm - 1000.0)/1000.0; //Between 0 and 1
+  roll_des = (channel_2_pwm - 1500.0)/500.0; //Between -1 and 1
+  pitch_des = (channel_3_pwm - 1500.0)/500.0; //Between -1 and 1
+  yaw_des = (channel_4_pwm - 1500.0)/500.0; //Between -1 and 1
+  roll_passthru = roll_des/2.0; //Between -0.5 and 0.5
+  pitch_passthru = pitch_des/2.0; //Between -0.5 and 0.5
+  yaw_passthru = yaw_des/2.0; //Between -0.5 and 0.5
+  
+  //Constrain within normalized bounds
+  thro_des = constrain(thro_des, 0.0, 1.0); //Between 0 and 1
+  roll_des = constrain(roll_des, -1.0, 1.0)*maxRoll; //Between -maxRoll and +maxRoll
+  pitch_des = constrain(pitch_des, -1.0, 1.0)*maxPitch; //Between -maxPitch and +maxPitch
+  yaw_des = constrain(yaw_des, -1.0, 1.0)*maxYaw; //Between -maxYaw and +maxYaw
+  roll_passthru = constrain(roll_passthru, -0.5, 0.5);
+  pitch_passthru = constrain(pitch_passthru, -0.5, 0.5);
+  yaw_passthru = constrain(yaw_passthru, -0.5, 0.5);
+  
 }
 
 void controlANGLE() {
@@ -1062,11 +1123,41 @@ void throttleCut() {
     m2_command_PWM = 120;
     m3_command_PWM = 120;
     m4_command_PWM = 120;
-    
-    //Uncomment if using servo PWM variables to control motor ESCs
-    //s1_command_PWM = 0;
-    //s2_command_PWM = 0;
   }
+}
+
+void getFlightMode() {
+  if (channel_6_pwm > 1500) {
+    flightMode = AUTONOMOUS;
+  } else {
+    flightMode = MANUAL;
+  }
+}
+
+void getUSdata() {
+
+  float prevDistance = USdistance;
+  
+  do {
+     for (int i=0; i<4; i++) {
+       USdata[i] = USSerial.read();
+     }
+  } while (USSerial.read() == 0xff);
+
+  USSerial.flush();
+
+  if (USdata[0] == 0xff) {
+      int sum;
+      float distance;
+      sum = (USdata[0] + USdata[1] + USdata[2]) & 0x00FF;
+      if (sum == USdata[3])
+      {
+        distance = (USdata[1] << 8) + USdata[2];
+        if (distance > 30) {
+           USdistance = distance;
+        }
+      }
+   }
 }
 
 void loopRate(int freq) {
