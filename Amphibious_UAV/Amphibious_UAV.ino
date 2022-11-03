@@ -16,7 +16,7 @@
 #include <PWMServo.h>                 //Commanding any extra actuators, installed with teensyduino installer
 #include "src/MPU6050/MPU6050.h"      // MPU-6050 IMU
 
-SoftwareSerial USSerial(11,10); // RX, TX
+SoftwareSerial USSerial(15, 14); // RX, TX
 MPU6050 mpu6050;
 
 // Select gyro full scale range (deg/sec)
@@ -99,6 +99,7 @@ float dt;
 unsigned long current_time, prev_time;
 unsigned long print_counter, serial_counter;
 unsigned long blink_counter, blink_delay;
+unsigned int slowLoopCounter;
 bool blinkAlternate;
 
 // Radio communication
@@ -275,7 +276,7 @@ void loop() {
   //printGyroData();      //Prints filtered gyro data direct from IMU (expected: ~ -250 to 250, 0 at rest)
   //printAccelData();     //Prints filtered accelerometer data direct from IMU (expected: ~ -2 to 2; x,y 0 when level, z 1 when level)
   //printRollPitchYaw();  //Prints roll, pitch, and yaw angles in degrees from Madgwick filter (expected: degrees, 0 when level)
-  //printAltitude();      //Prints altitude from ultrasonic rangefinder
+  printAltitude();      //Prints altitude from ultrasonic rangefinder
   //printPIDoutput();     //Prints computed stabilized PID variables from controller and desired setpoint (expected: ~ -1 to 1)
   //printMotorCommands(); //Prints the values being written to the motors (expected: 120 to 250)
   //printServoCommands(); //Prints the values being written to the servos (expected: 0 to 180)
@@ -283,16 +284,23 @@ void loop() {
 
   // Get vehicle state
   getIMUdata(); //Pulls raw gyro, accelerometer, and magnetometer data from IMU and LP filters to remove noise
-  getUSdata();  //Gets altitude measurement from A0221AU ultrasonic rangefinder
   Madgwick(GyroX, -GyroY, -GyroZ, -AccX, AccY, AccZ, dt); //Updates roll_IMU, pitch_IMU, and yaw_IMU angle estimates (degrees)
+
+  // Get altitude (sampling at 10 Hz bc can't handle 2000 Hz)
+  slowLoopCounter++;
+  if (slowLoopCounter == 200) {
+    getUSdata();  //Gets altitude measurement from A0221AU ultrasonic rangefinder
+    slowLoopCounter = 0;
+  }
+
+  // Flight mode check
+  getFlightMode();
 
   // Compute desired state
   getDesState(); //Convert raw commands to normalized values based on saturated control limits
   
-  // PID Controller - SELECT ONE:
+  // PID Controller
   controlANGLE(); //Stabilize on angle setpoint
-  //controlANGLE2(); //Stabilize on angle setpoint using cascaded method. Rate controller must be tuned well first!
-  //controlRATE(); //Stabilize on rate setpoint
 
   // Actuator mixing and scaling to PWM values
   controlMixer(); //Mixes PID outputs to scaled actuator commands -- custom mixing assignments done here
@@ -300,9 +308,6 @@ void loop() {
 
   // Throttle cut check
   throttleCut(); //Directly sets motor commands to low based on state of ch5
-
-  // Flight mode check
-  getFlightMode();
 
   // Command actuators
   commandMotors(); //Sends command pulses to each motor pin using OneShot125 protocol
@@ -1005,9 +1010,8 @@ void getUSdata() {
   if (USdata[0] == 0xff) {
       int sum;
       float distance;
-      sum = (USdata[0] + USdata[1] + USdata[2]) & 0x00FF;
-      if (sum == USdata[3])
-      {
+      sum = (USdata[0] + USdata[1] + USdata[2]) & 0x00FF;     
+      if (sum == USdata[3]) {
         distance = (USdata[1] << 8) + USdata[2];
         if (distance > 30) {
            USdistance = distance;
@@ -1172,7 +1176,8 @@ void printAltitude() {
   if (current_time - print_counter > 10000) {
     print_counter = micros();
     Serial.print(F("Altitude: "));
-    Serial.print(USdistance);
+    Serial.print(USdistance/10.0);
+    Serial.println(F(" cm"));
   }
 }
 
