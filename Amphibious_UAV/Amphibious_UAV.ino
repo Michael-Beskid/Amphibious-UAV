@@ -139,8 +139,8 @@ int s1_command_PWM, s2_command_PWM, s3_command_PWM, s4_command_PWM, s5_command_P
 
 // Flight Modes Enumeration
 enum flightModes {
-  AUTONOMOUS,
-  MANUAL
+  MANUAL,
+  AUTONOMOUS
 };
 
 enum flightModes flightMode;
@@ -155,7 +155,7 @@ unsigned long channel_1_fs = 1000; //thro
 unsigned long channel_2_fs = 1500; //ail
 unsigned long channel_3_fs = 1500; //elev
 unsigned long channel_4_fs = 1500; //rudd
-unsigned long channel_5_fs = 2000; //gear, greater than 1500 = throttle cut
+unsigned long channel_5_fs = 2000; //greater than 1500 = throttle cut
 unsigned long channel_6_fs = 2000; //aux1
 
 //Filter parameters - Defaults tuned for 2kHz loop rate; Do not touch unless you know what you are doing:
@@ -272,11 +272,12 @@ void loop() {
 
   // Print data at 100hz (uncomment one at a time for troubleshooting) - SELECT ONE:
   //printRadioData();     //Prints radio pwm values (expected: 1000 to 2000)
+  //printFlightMode();    //Prints the current flight mode
   //printDesiredState();  //Prints desired vehicle state commanded in either degrees or deg/sec (expected: +/- maxAXIS for roll, pitch, yaw; 0 to 1 for throttle)
   //printGyroData();      //Prints filtered gyro data direct from IMU (expected: ~ -250 to 250, 0 at rest)
   //printAccelData();     //Prints filtered accelerometer data direct from IMU (expected: ~ -2 to 2; x,y 0 when level, z 1 when level)
   //printRollPitchYaw();  //Prints roll, pitch, and yaw angles in degrees from Madgwick filter (expected: degrees, 0 when level)
-  printAltitude();      //Prints altitude from ultrasonic rangefinder
+  //printAltitude();      //Prints altitude from ultrasonic rangefinder
   //printPIDoutput();     //Prints computed stabilized PID variables from controller and desired setpoint (expected: ~ -1 to 1)
   //printMotorCommands(); //Prints the values being written to the motors (expected: 120 to 250)
   //printServoCommands(); //Prints the values being written to the servos (expected: 0 to 180)
@@ -605,11 +606,11 @@ void getDesState() {
    */
 
   switch (flightMode) {
-  case AUTONOMOUS:
-    getDesStateAuto();
-    break;
   case MANUAL:
     getDesStateManual();
+    break;
+  case AUTONOMOUS:
+    getDesStateAuto();
     break;
   default:
     getDesStateManual();
@@ -620,7 +621,7 @@ void getDesState() {
 
 void getDesStateAuto() {
 
-  thro_des = (channel_1_pwm - 1000.0)/1000.0; //Between 0 and 1
+  thro_des = (channel_1_pwm - 1000.0)/1000.0; //Between 0 and 1    TODO: Add PID Altitude controller here
   roll_des = (channel_2_pwm - 1500.0)/500.0; //Between -1 and 1
   pitch_des = (channel_3_pwm - 1500.0)/500.0; //Between -1 and 1
   yaw_des = (channel_4_pwm - 1500.0)/500.0; //Between -1 and 1
@@ -1178,6 +1179,14 @@ void printAltitude() {
     Serial.print(F("Altitude: "));
     Serial.print(USdistance/10.0);
     Serial.println(F(" cm"));
+  }
+}
+
+void printFlightMode() {
+  if (current_time - print_counter > 10000) {
+    print_counter = micros();
+    Serial.print(F("Flight Mode: "));
+    Serial.println(flightMode);
   }
 }
 
