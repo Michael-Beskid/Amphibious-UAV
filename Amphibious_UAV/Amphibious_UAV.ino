@@ -15,9 +15,12 @@
 #include <SoftwareSerial.h>           // Serial communication
 #include <PWMServo.h>                 //Commanding any extra actuators, installed with teensyduino installer
 #include "src/MPU6050/MPU6050.h"      // MPU-6050 IMU
+#include "MS5837.h"                   // BlueRobotics Bar30 Depth Sensor
 
 SoftwareSerial USSerial(15, 14); // RX, TX
 MPU6050 mpu6050;
+
+MS5837 ms5837;
 
 // Select gyro full scale range (deg/sec)
 #define GYRO_250DPS //Default
@@ -121,6 +124,9 @@ float q3 = 0.0f;
 // Ultrasonic Rangefinder
 unsigned char USdata[4] = {};
 float USdistance;
+
+// BlueRobotics Depth Sensor
+float depth;
 
 // Normalized desired state
 float thro_des, roll_des, pitch_des, yaw_des;
@@ -230,6 +236,9 @@ void setup() {
   // Initialize IMU communication
   IMUinit();
 
+  // Initialize depth sensor
+  depthSensorInit();
+
   delay(5);
 
   // Get IMU error to zero accelerometer and gyro readings, assuming vehicle is level when powered up
@@ -277,7 +286,8 @@ void loop() {
   //printGyroData();      //Prints filtered gyro data direct from IMU (expected: ~ -250 to 250, 0 at rest)
   //printAccelData();     //Prints filtered accelerometer data direct from IMU (expected: ~ -2 to 2; x,y 0 when level, z 1 when level)
   //printRollPitchYaw();  //Prints roll, pitch, and yaw angles in degrees from Madgwick filter (expected: degrees, 0 when level)
-  //printAltitude();      //Prints altitude from ultrasonic rangefinder
+  //printAltitude();      //Prints altitude measurements from ultrasonic rangefinder
+  //printDepth();         //Prints depth measurements from the BlueRobotics depth sensor
   //printPIDoutput();     //Prints computed stabilized PID variables from controller and desired setpoint (expected: ~ -1 to 1)
   //printMotorCommands(); //Prints the values being written to the motors (expected: 120 to 250)
   //printServoCommands(); //Prints the values being written to the servos (expected: 0 to 180)
@@ -287,9 +297,11 @@ void loop() {
   getIMUdata(); //Pulls raw gyro, accelerometer, and magnetometer data from IMU and LP filters to remove noise
   Madgwick(GyroX, -GyroY, -GyroZ, -AccX, AccY, AccZ, dt); //Updates roll_IMU, pitch_IMU, and yaw_IMU angle estimates (degrees)
 
-  // Get altitude (sampling at 10 Hz bc can't handle 2000 Hz)
+  // Get altitude (sampling at 10 Hz bc can't handle 2 kHz)
   slowLoopCounter++;
-  if (slowLoopCounter == 200) {
+  if (slowLoopCounter == 100) {
+    getDepth();   //Gets depth measurement from BlueRobotics depth sensor. This is slow (40ms according to library), might be a problem.
+  } else if (slowLoopCounter == 200) {
     getUSdata();  //Gets altitude measurement from A0221AU ultrasonic rangefinder
     slowLoopCounter = 0;
   }
@@ -381,6 +393,21 @@ void IMUinit() {
     
 }
 
+void depthSensorInit() {
+  
+  Wire1.begin();
+
+  if (ms5837.init() == false) {
+    Serial.println("MS5837 initialization unsuccessful");
+    Serial.println("Check wiring or try cycling power");
+    Serial.println("Blue Robotics Bar30: White=SDA, Green=SCL");
+    while(1) {}
+  }
+  
+  ms5837.setModel(MS5837::MS5837_30BA);
+  ms5837.setFluidDensity(997); // kg/m^3 (freshwater, 1029 for seawater)
+}
+
 void getIMUdata() {
   //DESCRIPTION: Request full dataset from IMU and LP filter gyro, accelerometer, and magnetometer data
   /*
@@ -427,6 +454,11 @@ void getIMUdata() {
   GyroY_prev = GyroY;
   GyroZ_prev = GyroZ;
 
+}
+
+void getDepth() {
+  ms5837.read();
+  depth = ms5837.depth();
 }
 
 void calculate_IMU_error() {
@@ -622,6 +654,17 @@ void getDesState() {
 void getDesStateAuto() {
 
   thro_des = (channel_1_pwm - 1000.0)/1000.0; //Between 0 and 1    TODO: Add PID Altitude controller here
+
+//  // PID for Altitude Controller
+//  error_altitude = altitude_des - distanceUS;
+//  integral_altitude = integral_altitude_prev + error_altitude*dt;
+//  integral_altitude = constrain(integral_altitude, -i_limit, i_limit); //Saturate integrator to prevent unsafe buildup
+//  derivative_altitude = XXXX-FIGURE-THIS-OUT-XXXX;
+//  altitude_PID = 0.01*(Kp_altitude*error_roll + Ki_altitude*integral_roll - Kd_altitude*derivative_roll); //Scaled by .01 to bring within -1 to 1 range
+//  integral_altitude_prev = integral_altitude; //Update 
+//
+//  thro_des = (hover_throttle - 1000.0)/1000.0 + altitude_PID;
+  
   roll_des = (channel_2_pwm - 1500.0)/500.0; //Between -1 and 1
   pitch_des = (channel_3_pwm - 1500.0)/500.0; //Between -1 and 1
   yaw_des = (channel_4_pwm - 1500.0)/500.0; //Between -1 and 1
@@ -1179,6 +1222,15 @@ void printAltitude() {
     Serial.print(F("Altitude: "));
     Serial.print(USdistance/10.0);
     Serial.println(F(" cm"));
+  }
+}
+
+void printDepth() {
+  if (current_time - print_counter > 10000) {
+    print_counter = micros();
+    Serial.print(F("Depth: "));
+    Serial.print(depth);
+    Serial.println(F(" m"));
   }
 }
 
