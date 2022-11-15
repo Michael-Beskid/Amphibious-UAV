@@ -2,7 +2,7 @@
 // Worcester Polytechnic Institute
 // MQP Advisor: Professor Demetriou
 // Team Members: Michael Beskid, Ryan Brunelle, Calista Carrignan, Robert Devlin, Toshak Patel, & Kofi Sarfo
-// Adapted from dRehmFlight developed by Nicholad Rehm
+// Adapted from dRehmFlight developed by Nicholas Rehm
 
 
 
@@ -10,11 +10,17 @@
 //                                                 LIBRARIES & DEFINES                                                    //                                                                 
 //========================================================================================================================//
 
-#include <Wire.h>                     //I2c communication
-#include <SPI.h>                      //SPI communication
+#include <Wire.h>                     // I2C communication
+#include <SPI.h>                      // SPI communication
+#include <SoftwareSerial.h>           // Serial communication
 #include <PWMServo.h>                 //Commanding any extra actuators, installed with teensyduino installer
 #include "src/MPU6050/MPU6050.h"      // MPU-6050 IMU
+#include "MS5837.h"                   // BlueRobotics Bar30 Depth Sensor
+
+SoftwareSerial USSerial(15, 14); // RX, TX
 MPU6050 mpu6050;
+
+MS5837 ms5837;
 
 // Select gyro full scale range (deg/sec)
 #define GYRO_250DPS //Default
@@ -96,6 +102,7 @@ float dt;
 unsigned long current_time, prev_time;
 unsigned long print_counter, serial_counter;
 unsigned long blink_counter, blink_delay;
+unsigned int slowLoopCounter;
 bool blinkAlternate;
 
 // Radio communication
@@ -114,6 +121,13 @@ float q1 = 0.0f;
 float q2 = 0.0f;
 float q3 = 0.0f;
 
+// Ultrasonic Rangefinder
+unsigned char USdata[4] = {};
+float USdistance;
+
+// BlueRobotics Depth Sensor
+float depth;
+
 // Normalized desired state
 float thro_des, roll_des, pitch_des, yaw_des;
 float roll_passthru, pitch_passthru, yaw_passthru;
@@ -122,6 +136,7 @@ float roll_passthru, pitch_passthru, yaw_passthru;
 float error_roll, error_roll_prev, roll_des_prev, integral_roll, integral_roll_il, integral_roll_ol, integral_roll_prev, integral_roll_prev_il, integral_roll_prev_ol, derivative_roll, roll_PID = 0;
 float error_pitch, error_pitch_prev, pitch_des_prev, integral_pitch, integral_pitch_il, integral_pitch_ol, integral_pitch_prev, integral_pitch_prev_il, integral_pitch_prev_ol, derivative_pitch, pitch_PID = 0;
 float error_yaw, error_yaw_prev, integral_yaw, integral_yaw_prev, derivative_yaw, yaw_PID = 0;
+float error_altitude, error_altitude_prev, altitude_des_prev, integral_altitude, integral_altitude_prev, derivative_altitude, altitude_PID = 0;
 
 // Mixer
 float m1_command_scaled, m2_command_scaled, m3_command_scaled, m4_command_scaled;
@@ -129,6 +144,36 @@ int m1_command_PWM, m2_command_PWM, m3_command_PWM, m4_command_PWM;
 float s1_command_scaled, s2_command_scaled, s3_command_scaled, s4_command_scaled, s5_command_scaled, s6_command_scaled, s7_command_scaled;
 int s1_command_PWM, s2_command_PWM, s3_command_PWM, s4_command_PWM, s5_command_PWM, s6_command_PWM, s7_command_PWM;
 
+// Flight Modes Enumeration
+enum flightModes {
+  MANUAL,
+  AUTONOMOUS
+};
+
+enum flightModes flightMode;
+
+// Manual Mode States Enumeration
+enum manualStates {
+  MANUAL_STARTUP,
+  NORMAL,
+};
+
+enum manualStates manualState;
+
+// Auto Mode States Enumeration
+enum autoStates {
+  AUTO_STARTUP,
+  HOVER,
+  LAND
+};
+
+enum autoStates missionState;
+
+// Motion Planning
+float altitude_des = 1000; // mm
+float depth_des = 0.0;
+float targetX = 0.0;
+float targetY = 0.0;
 
 
 //========================================================================================================================//
@@ -140,7 +185,7 @@ unsigned long channel_1_fs = 1000; //thro
 unsigned long channel_2_fs = 1500; //ail
 unsigned long channel_3_fs = 1500; //elev
 unsigned long channel_4_fs = 1500; //rudd
-unsigned long channel_5_fs = 2000; //gear, greater than 1500 = throttle cut
+unsigned long channel_5_fs = 2000; //greater than 1500 = throttle cut
 unsigned long channel_6_fs = 2000; //aux1
 
 //Filter parameters - Defaults tuned for 2kHz loop rate; Do not touch unless you know what you are doing:
@@ -150,12 +195,12 @@ float B_gyro = 0.1;       //Gyro LP filter paramter, (MPU6050 default: 0.1. MPU9
 float B_mag = 1.0;        //Magnetometer LP filter parameter
 
 //IMU calibration parameters - calibrate IMU using calculate_IMU_error() in the void setup() to get these values, then comment out calculate_IMU_error()
-float AccErrorX = 0.13;
-float AccErrorY = -0.03;
-float AccErrorZ = -0.08;
-float GyroErrorX = 3.25;
-float GyroErrorY= -2.57;
-float GyroErrorZ = -0.76;
+float AccErrorX = 0.17;
+float AccErrorY = -0.07;
+float AccErrorZ = -0.02;
+float GyroErrorX = -0.64;
+float GyroErrorY= -2.56;
+float GyroErrorZ = -0.73;
 
 //Controller parameters (take note of defaults before modifying!): 
 float i_limit = 25.0;     //Integrator saturation level, mostly for safety (default 25.0)
@@ -163,25 +208,20 @@ float maxRoll = 30.0;     //Max roll angle in degrees for angle mode (maximum ~7
 float maxPitch = 30.0;    //Max pitch angle in degrees for angle mode (maximum ~70 degrees), deg/sec for rate mode
 float maxYaw = 160.0;     //Max yaw rate in deg/sec
 
-float Kp_roll_angle = 0.2;    //Roll P-gain - angle mode 
-float Ki_roll_angle = 0.3;    //Roll I-gain - angle mode
-float Kd_roll_angle = 0.05;   //Roll D-gain - angle mode (has no effect on controlANGLE2)
-float B_loop_roll = 0.9;      //Roll damping term for controlANGLE2(), lower is more damping (must be between 0 to 1)
-float Kp_pitch_angle = 0.2;   //Pitch P-gain - angle mode
-float Ki_pitch_angle = 0.3;   //Pitch I-gain - angle mode
-float Kd_pitch_angle = 0.05;  //Pitch D-gain - angle mode (has no effect on controlANGLE2)
-float B_loop_pitch = 0.9;     //Pitch damping term for controlANGLE2(), lower is more damping (must be between 0 to 1)
-
-float Kp_roll_rate = 0.15;    //Roll P-gain - rate mode
-float Ki_roll_rate = 0.2;     //Roll I-gain - rate mode
-float Kd_roll_rate = 0.0002;  //Roll D-gain - rate mode (be careful when increasing too high, motors will begin to overheat!)
-float Kp_pitch_rate = 0.15;   //Pitch P-gain - rate mode
-float Ki_pitch_rate = 0.2;    //Pitch I-gain - rate mode
-float Kd_pitch_rate = 0.0002; //Pitch D-gain - rate mode (be careful when increasing too high, motors will begin to overheat!)
-
+float Kp_roll_angle = 0.2;    //Roll P-gain
+float Ki_roll_angle = 0.3;    //Roll I-gain
+float Kd_roll_angle = 0.05;   //Roll D-gain
+float Kp_pitch_angle = 0.2;   //Pitch P-gain
+float Ki_pitch_angle = 0.3;   //Pitch I-gain
+float Kd_pitch_angle = 0.05;  //Pitch D-gain
 float Kp_yaw = 0.3;           //Yaw P-gain
 float Ki_yaw = 0.05;          //Yaw I-gain
-float Kd_yaw = 0.00015;       //Yaw D-gain (be careful when increasing too high, motors will begin to overheat!)
+float Kd_yaw = 0.00015;       //Yaw D-gain
+
+float Kp_altitude = 15.0;         //Altitude P-gain
+float Ki_altitude = 10.0;         //Altitude I-gain
+float Kd_altitude = 2.0;          //Altitude D-gain
+float i_limit_altitude = 100.0;   //Integrator saturation level
 
 
 
@@ -191,6 +231,7 @@ float Kd_yaw = 0.00015;       //Yaw D-gain (be careful when increasing too high,
 
 void setup() {
   Serial.begin(500000); //USB serial
+  USSerial.begin(9600); 
   delay(500);
   
   // Initialize all pins
@@ -204,6 +245,10 @@ void setup() {
 
   // Set built in LED to turn on to signal startup
   digitalWrite(13, HIGH);
+
+  // Start in manual flight mode
+  flightMode = MANUAL;
+  manualState = MANUAL_STARTUP;
 
   delay(5);
 
@@ -220,6 +265,9 @@ void setup() {
 
   // Initialize IMU communication
   IMUinit();
+
+  // Initialize depth sensor
+//  depthSensorInit();
 
   delay(5);
 
@@ -263,10 +311,13 @@ void loop() {
 
   // Print data at 100hz (uncomment one at a time for troubleshooting) - SELECT ONE:
   //printRadioData();     //Prints radio pwm values (expected: 1000 to 2000)
+  //printFlightMode();    //Prints the current flight mode
   //printDesiredState();  //Prints desired vehicle state commanded in either degrees or deg/sec (expected: +/- maxAXIS for roll, pitch, yaw; 0 to 1 for throttle)
   //printGyroData();      //Prints filtered gyro data direct from IMU (expected: ~ -250 to 250, 0 at rest)
   //printAccelData();     //Prints filtered accelerometer data direct from IMU (expected: ~ -2 to 2; x,y 0 when level, z 1 when level)
   //printRollPitchYaw();  //Prints roll, pitch, and yaw angles in degrees from Madgwick filter (expected: degrees, 0 when level)
+  //printAltitude();      //Prints altitude measurements from ultrasonic rangefinder
+  //printDepth();         //Prints depth measurements from the BlueRobotics depth sensor
   //printPIDoutput();     //Prints computed stabilized PID variables from controller and desired setpoint (expected: ~ -1 to 1)
   //printMotorCommands(); //Prints the values being written to the motors (expected: 120 to 250)
   //printServoCommands(); //Prints the values being written to the servos (expected: 0 to 180)
@@ -276,13 +327,23 @@ void loop() {
   getIMUdata(); //Pulls raw gyro, accelerometer, and magnetometer data from IMU and LP filters to remove noise
   Madgwick(GyroX, -GyroY, -GyroZ, -AccX, AccY, AccZ, dt); //Updates roll_IMU, pitch_IMU, and yaw_IMU angle estimates (degrees)
 
+  // Get altitude (sampling at 10 Hz bc can't handle 2 kHz)
+  slowLoopCounter++;
+  if (slowLoopCounter == 100) {
+    getDepth();   //Gets depth measurement from BlueRobotics depth sensor. This is slow (40ms according to library), might be a problem.
+  } else if (slowLoopCounter == 200) {
+    getUSdata();  //Gets altitude measurement from A0221AU ultrasonic rangefinder
+    slowLoopCounter = 0;
+  }
+
+  // Flight mode check
+  getFlightMode();
+
   // Compute desired state
   getDesState(); //Convert raw commands to normalized values based on saturated control limits
   
-  // PID Controller - SELECT ONE:
+  // PID Controller
   controlANGLE(); //Stabilize on angle setpoint
-  //controlANGLE2(); //Stabilize on angle setpoint using cascaded method. Rate controller must be tuned well first!
-  //controlRATE(); //Stabilize on rate setpoint
 
   // Actuator mixing and scaling to PWM values
   controlMixer(); //Mixes PID outputs to scaled actuator commands -- custom mixing assignments done here
@@ -362,6 +423,21 @@ void IMUinit() {
     
 }
 
+void depthSensorInit() {
+  
+  Wire1.begin();
+
+  if (ms5837.init() == false) {
+    Serial.println("MS5837 initialization unsuccessful");
+    Serial.println("Check wiring or try cycling power");
+    Serial.println("Blue Robotics Bar30: White=SDA, Green=SCL");
+    while(1) {}
+  }
+  
+  ms5837.setModel(MS5837::MS5837_30BA);
+  ms5837.setFluidDensity(997); // kg/m^3 (freshwater, 1029 for seawater)
+}
+
 void getIMUdata() {
   //DESCRIPTION: Request full dataset from IMU and LP filter gyro, accelerometer, and magnetometer data
   /*
@@ -408,6 +484,11 @@ void getIMUdata() {
   GyroY_prev = GyroY;
   GyroZ_prev = GyroZ;
 
+}
+
+void getDepth() {
+  ms5837.read();
+  depth = ms5837.depth();
 }
 
 void calculate_IMU_error() {
@@ -585,6 +666,85 @@ void getDesState() {
    * (rate mode). yaw_des is scaled to be within max yaw in degrees/sec. Also creates roll_passthru, pitch_passthru, and
    * yaw_passthru variables, to be used in commanding motors/servos with direct unstabilized commands in controlMixer().
    */
+
+ // The outer state machine allows for toggling between flight modes, control of which is mapped to the radio transmitter
+ // The inner state machines for each flight mode are controlled by the computer
+ // The manual mode begins in STARTUP to set a few variables before transitioning into NORMAL for manual radio control
+ // The auto mode begins in STARTUP to set a few variables, then transitions between a sequence of pre-defined states to complete the autonomous mission
+
+  switch (flightMode) {
+    case MANUAL:
+      switch (manualState) {
+        case MANUAL_STARTUP:
+          missionState = AUTO_STARTUP;
+          manualState = NORMAL;
+          break;
+        case NORMAL:
+          break;
+        default:
+          break;
+      }
+      getDesStateManual();
+      break;
+    case AUTONOMOUS: 
+      switch (missionState) {
+        case AUTO_STARTUP:
+          integral_altitude_prev = 0.0;
+          error_altitude_prev = 0.0;
+          manualState = MANUAL_STARTUP;
+          missionState = HOVER;
+          break;
+        case HOVER:
+          break;
+        case LAND:
+          break;
+        default:
+          break;
+      }  
+      getDesStateAuto();
+      break;
+    default:
+      getDesStateManual();
+      break;
+  }
+}
+
+void getDesStateAuto() {
+
+  // PID for Altitude Controller
+  error_altitude = altitude_des - USdistance;
+  integral_altitude = integral_altitude_prev + error_altitude*dt;
+  integral_altitude = constrain(integral_altitude, -i_limit_altitude, i_limit_altitude); //Saturate integrator to prevent unsafe buildup
+  derivative_altitude = (error_altitude - error_altitude_prev)/dt; 
+  altitude_PID = 0.00005*(Kp_altitude*error_altitude + Ki_altitude*integral_altitude - Kd_altitude*derivative_altitude); //Scaled by .00005 to bring within 0 to 1 range
+
+  // Update variables
+  integral_altitude_prev = integral_altitude;
+  error_altitude_prev = error_altitude;
+
+  // Set desired throttle value from altitude controller
+  thro_des = altitude_PID;
+  
+  roll_des = (channel_2_pwm - 1500.0)/500.0; //Between -1 and 1
+  pitch_des = (channel_3_pwm - 1500.0)/500.0; //Between -1 and 1
+  yaw_des = (channel_4_pwm - 1500.0)/500.0; //Between -1 and 1
+  roll_passthru = roll_des/2.0; //Between -0.5 and 0.5
+  pitch_passthru = pitch_des/2.0; //Between -0.5 and 0.5
+  yaw_passthru = yaw_des/2.0; //Between -0.5 and 0.5
+  
+  //Constrain within normalized bounds
+  thro_des = constrain(thro_des, 0.0, 1.0); //Between 0 and 1
+  roll_des = constrain(roll_des, -1.0, 1.0)*maxRoll; //Between -maxRoll and +maxRoll
+  pitch_des = constrain(pitch_des, -1.0, 1.0)*maxPitch; //Between -maxPitch and +maxPitch
+  yaw_des = constrain(yaw_des, -1.0, 1.0)*maxYaw; //Between -maxYaw and +maxYaw
+  roll_passthru = constrain(roll_passthru, -0.5, 0.5);
+  pitch_passthru = constrain(pitch_passthru, -0.5, 0.5);
+  yaw_passthru = constrain(yaw_passthru, -0.5, 0.5);
+  
+}
+
+void getDesStateManual() {
+  
   thro_des = (channel_1_pwm - 1000.0)/1000.0; //Between 0 and 1
   roll_des = (channel_2_pwm - 1500.0)/500.0; //Between -1 and 1
   pitch_des = (channel_3_pwm - 1500.0)/500.0; //Between -1 and 1
@@ -601,6 +761,7 @@ void getDesState() {
   roll_passthru = constrain(roll_passthru, -0.5, 0.5);
   pitch_passthru = constrain(pitch_passthru, -0.5, 0.5);
   yaw_passthru = constrain(yaw_passthru, -0.5, 0.5);
+  
 }
 
 void controlANGLE() {
@@ -653,140 +814,7 @@ void controlANGLE() {
   //Update yaw variables
   error_yaw_prev = error_yaw;
   integral_yaw_prev = integral_yaw;
-}
-
-void controlANGLE2() {
-  //DESCRIPTION: Computes control commands based on state error (angle) in cascaded scheme
-  /*
-   * Gives better performance than controlANGLE() but requires much more tuning. Not reccommended for first-time setup.
-   * See the documentation for tuning this controller.
-   */
-  //Outer loop - PID on angle
-  float roll_des_ol, pitch_des_ol;
-  //Roll
-  error_roll = roll_des - roll_IMU;
-  integral_roll_ol = integral_roll_prev_ol + error_roll*dt;
-  if (channel_1_pwm < 1060) {   //Don't let integrator build if throttle is too low
-    integral_roll_ol = 0;
-  }
-  integral_roll_ol = constrain(integral_roll_ol, -i_limit, i_limit); //Saturate integrator to prevent unsafe buildup
-  derivative_roll = (roll_IMU - roll_IMU_prev)/dt; 
-  roll_des_ol = Kp_roll_angle*error_roll + Ki_roll_angle*integral_roll_ol;// - Kd_roll_angle*derivative_roll;
-
-  //Pitch
-  error_pitch = pitch_des - pitch_IMU;
-  integral_pitch_ol = integral_pitch_prev_ol + error_pitch*dt;
-  if (channel_1_pwm < 1060) {   //Don't let integrator build if throttle is too low
-    integral_pitch_ol = 0;
-  }
-  integral_pitch_ol = constrain(integral_pitch_ol, -i_limit, i_limit); //saturate integrator to prevent unsafe buildup
-  derivative_pitch = (pitch_IMU - pitch_IMU_prev)/dt;
-  pitch_des_ol = Kp_pitch_angle*error_pitch + Ki_pitch_angle*integral_pitch_ol;// - Kd_pitch_angle*derivative_pitch;
-
-  //Apply loop gain, constrain, and LP filter for artificial damping
-  float Kl = 30.0;
-  roll_des_ol = Kl*roll_des_ol;
-  pitch_des_ol = Kl*pitch_des_ol;
-  roll_des_ol = constrain(roll_des_ol, -240.0, 240.0);
-  pitch_des_ol = constrain(pitch_des_ol, -240.0, 240.0);
-  roll_des_ol = (1.0 - B_loop_roll)*roll_des_prev + B_loop_roll*roll_des_ol;
-  pitch_des_ol = (1.0 - B_loop_pitch)*pitch_des_prev + B_loop_pitch*pitch_des_ol;
-
-  //Inner loop - PID on rate
-  //Roll
-  error_roll = roll_des_ol - GyroX;
-  integral_roll_il = integral_roll_prev_il + error_roll*dt;
-  if (channel_1_pwm < 1060) {   //Don't let integrator build if throttle is too low
-    integral_roll_il = 0;
-  }
-  integral_roll_il = constrain(integral_roll_il, -i_limit, i_limit); //Saturate integrator to prevent unsafe buildup
-  derivative_roll = (error_roll - error_roll_prev)/dt; 
-  roll_PID = .01*(Kp_roll_rate*error_roll + Ki_roll_rate*integral_roll_il + Kd_roll_rate*derivative_roll); //Scaled by .01 to bring within -1 to 1 range
-
-  //Pitch
-  error_pitch = pitch_des_ol - GyroY;
-  integral_pitch_il = integral_pitch_prev_il + error_pitch*dt;
-  if (channel_1_pwm < 1060) {   //Don't let integrator build if throttle is too low
-    integral_pitch_il = 0;
-  }
-  integral_pitch_il = constrain(integral_pitch_il, -i_limit, i_limit); //Saturate integrator to prevent unsafe buildup
-  derivative_pitch = (error_pitch - error_pitch_prev)/dt; 
-  pitch_PID = .01*(Kp_pitch_rate*error_pitch + Ki_pitch_rate*integral_pitch_il + Kd_pitch_rate*derivative_pitch); //Scaled by .01 to bring within -1 to 1 range
   
-  //Yaw
-  error_yaw = yaw_des - GyroZ;
-  integral_yaw = integral_yaw_prev + error_yaw*dt;
-  if (channel_1_pwm < 1060) {   //Don't let integrator build if throttle is too low
-    integral_yaw = 0;
-  }
-  integral_yaw = constrain(integral_yaw, -i_limit, i_limit); //Saturate integrator to prevent unsafe buildup
-  derivative_yaw = (error_yaw - error_yaw_prev)/dt; 
-  yaw_PID = .01*(Kp_yaw*error_yaw + Ki_yaw*integral_yaw + Kd_yaw*derivative_yaw); //Scaled by .01 to bring within -1 to 1 range
-  
-  //Update roll variables
-  integral_roll_prev_ol = integral_roll_ol;
-  integral_roll_prev_il = integral_roll_il;
-  error_roll_prev = error_roll;
-  roll_IMU_prev = roll_IMU;
-  roll_des_prev = roll_des_ol;
-  //Update pitch variables
-  integral_pitch_prev_ol = integral_pitch_ol;
-  integral_pitch_prev_il = integral_pitch_il;
-  error_pitch_prev = error_pitch;
-  pitch_IMU_prev = pitch_IMU;
-  pitch_des_prev = pitch_des_ol;
-  //Update yaw variables
-  error_yaw_prev = error_yaw;
-  integral_yaw_prev = integral_yaw;
-
-}
-
-void controlRATE() {
-  //DESCRIPTION: Computes control commands based on state error (rate)
-  /*
-   * See explanation for controlANGLE(). Everything is the same here except the error is now the desired rate - raw gyro reading.
-   */
-  //Roll
-  error_roll = roll_des - GyroX;
-  integral_roll = integral_roll_prev + error_roll*dt;
-  if (channel_1_pwm < 1060) {   //Don't let integrator build if throttle is too low
-    integral_roll = 0;
-  }
-  integral_roll = constrain(integral_roll, -i_limit, i_limit); //Saturate integrator to prevent unsafe buildup
-  derivative_roll = (error_roll - error_roll_prev)/dt; 
-  roll_PID = .01*(Kp_roll_rate*error_roll + Ki_roll_rate*integral_roll + Kd_roll_rate*derivative_roll); //Scaled by .01 to bring within -1 to 1 range
-
-  //Pitch
-  error_pitch = pitch_des - GyroY;
-  integral_pitch = integral_pitch_prev + error_pitch*dt;
-  if (channel_1_pwm < 1060) {   //Don't let integrator build if throttle is too low
-    integral_pitch = 0;
-  }
-  integral_pitch = constrain(integral_pitch, -i_limit, i_limit); //Saturate integrator to prevent unsafe buildup
-  derivative_pitch = (error_pitch - error_pitch_prev)/dt; 
-  pitch_PID = .01*(Kp_pitch_rate*error_pitch + Ki_pitch_rate*integral_pitch + Kd_pitch_rate*derivative_pitch); //Scaled by .01 to bring within -1 to 1 range
-
-  //Yaw, stablize on rate from GyroZ
-  error_yaw = yaw_des - GyroZ;
-  integral_yaw = integral_yaw_prev + error_yaw*dt;
-  if (channel_1_pwm < 1060) {   //Don't let integrator build if throttle is too low
-    integral_yaw = 0;
-  }
-  integral_yaw = constrain(integral_yaw, -i_limit, i_limit); //Saturate integrator to prevent unsafe buildup
-  derivative_yaw = (error_yaw - error_yaw_prev)/dt; 
-  yaw_PID = .01*(Kp_yaw*error_yaw + Ki_yaw*integral_yaw + Kd_yaw*derivative_yaw); //Scaled by .01 to bring within -1 to 1 range
-
-  //Update roll variables
-  error_roll_prev = error_roll;
-  integral_roll_prev = integral_roll;
-  GyroX_prev = GyroX;
-  //Update pitch variables
-  error_pitch_prev = error_pitch;
-  integral_pitch_prev = integral_pitch;
-  GyroY_prev = GyroY;
-  //Update yaw variables
-  error_yaw_prev = error_yaw;
-  integral_yaw_prev = integral_yaw;
 }
 
 void scaleCommands() {
@@ -1062,11 +1090,38 @@ void throttleCut() {
     m2_command_PWM = 120;
     m3_command_PWM = 120;
     m4_command_PWM = 120;
-    
-    //Uncomment if using servo PWM variables to control motor ESCs
-    //s1_command_PWM = 0;
-    //s2_command_PWM = 0;
   }
+}
+
+void getFlightMode() {
+  if (channel_6_pwm > 1500) {
+    flightMode = AUTONOMOUS;
+  } else {
+    flightMode = MANUAL;
+  }
+}
+
+void getUSdata() {
+  
+  do {
+     for (int i=0; i<4; i++) {
+       USdata[i] = USSerial.read();
+     }
+  } while (USSerial.read() == 0xff);
+
+  USSerial.flush();
+
+  if (USdata[0] == 0xff) {
+      int sum;
+      float distance;
+      sum = (USdata[0] + USdata[1] + USdata[2]) & 0x00FF;     
+      if (sum == USdata[3]) {
+        distance = (USdata[1] << 8) + USdata[2];
+        if (distance > 30) {
+           USdistance = distance;
+        }
+      }
+   }
 }
 
 void loopRate(int freq) {
@@ -1218,6 +1273,36 @@ void printServoCommands() {
     Serial.print(s1_command_PWM);
     Serial.print(F(" s2_command: "));
     Serial.print(s2_command_PWM);
+  }
+}
+
+void printAltitude() {
+  if (current_time - print_counter > 10000) {
+    print_counter = micros();
+    Serial.print(F("Altitude: "));
+    Serial.print(USdistance/10.0);
+    Serial.println(F(" cm"));
+  }
+}
+
+void printDepth() {
+  if (current_time - print_counter > 10000) {
+    print_counter = micros();
+    Serial.print(F("Depth: "));
+    Serial.print(depth);
+    Serial.println(F(" m"));
+  }
+}
+
+void printFlightMode() {
+  if (current_time - print_counter > 10000) {
+    print_counter = micros();
+    Serial.print(F("Flight Mode: "));
+    if (flightMode) {
+      Serial.println(F("Autonomous"));
+    } else {
+      Serial.println(F("Manual"));
+    }
   }
 }
 
