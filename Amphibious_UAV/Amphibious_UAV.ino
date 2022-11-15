@@ -218,10 +218,11 @@ float Kp_yaw = 0.3;           //Yaw P-gain
 float Ki_yaw = 0.05;          //Yaw I-gain
 float Kd_yaw = 0.00015;       //Yaw D-gain
 
-float Kp_altitude = 15.0;         //Altitude P-gain
+float hover_throttle = 0.55;     //Baseline throttle for hovering
+float Kp_altitude = 2.0;         //Altitude P-gain
 float Ki_altitude = 10.0;         //Altitude I-gain
-float Kd_altitude = 2.0;          //Altitude D-gain
-float i_limit_altitude = 100.0;   //Integrator saturation level
+float Kd_altitude = 2.0;         //Altitude D-gain
+float i_limit_altitude = 25.0;   //Integrator saturation level
 
 
 
@@ -723,7 +724,7 @@ void getDesStateAuto() {
   error_altitude_prev = error_altitude;
 
   // Set desired throttle value from altitude controller
-  thro_des = altitude_PID;
+  thro_des = hover_throttle + altitude_PID;
   
   roll_des = (channel_2_pwm - 1500.0)/500.0; //Between -1 and 1
   pitch_des = (channel_3_pwm - 1500.0)/500.0; //Between -1 and 1
