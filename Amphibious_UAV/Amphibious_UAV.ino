@@ -2,7 +2,7 @@
 // Worcester Polytechnic Institute
 // MQP Advisor: Professor Demetriou
 // Team Members: Michael Beskid, Ryan Brunelle, Calista Carrignan, Robert Devlin, Toshak Patel, & Kofi Sarfo
-// Adapted from dRehmFlight developed by Nicholad Rehm
+// Adapted from dRehmFlight developed by Nicholas Rehm
 
 
 
@@ -136,6 +136,7 @@ float roll_passthru, pitch_passthru, yaw_passthru;
 float error_roll, error_roll_prev, roll_des_prev, integral_roll, integral_roll_il, integral_roll_ol, integral_roll_prev, integral_roll_prev_il, integral_roll_prev_ol, derivative_roll, roll_PID = 0;
 float error_pitch, error_pitch_prev, pitch_des_prev, integral_pitch, integral_pitch_il, integral_pitch_ol, integral_pitch_prev, integral_pitch_prev_il, integral_pitch_prev_ol, derivative_pitch, pitch_PID = 0;
 float error_yaw, error_yaw_prev, integral_yaw, integral_yaw_prev, derivative_yaw, yaw_PID = 0;
+float error_altitude, error_altitude_prev, altitude_des_prev, integral_altitude, integral_altitude_prev, derivative_altitude, altitude_PID = 0;
 
 // Mixer
 float m1_command_scaled, m2_command_scaled, m3_command_scaled, m4_command_scaled;
@@ -150,6 +151,29 @@ enum flightModes {
 };
 
 enum flightModes flightMode;
+
+// Manual Mode States Enumeration
+enum manualStates {
+  MANUAL_STARTUP,
+  NORMAL,
+};
+
+enum manualStates manualState;
+
+// Auto Mode States Enumeration
+enum autoStates {
+  AUTO_STARTUP,
+  HOVER,
+  LAND
+};
+
+enum autoStates missionState;
+
+// Motion Planning
+float altitude_des = 1000; // mm
+float depth_des = 0.0;
+float targetX = 0.0;
+float targetY = 0.0;
 
 
 //========================================================================================================================//
@@ -171,12 +195,12 @@ float B_gyro = 0.1;       //Gyro LP filter paramter, (MPU6050 default: 0.1. MPU9
 float B_mag = 1.0;        //Magnetometer LP filter parameter
 
 //IMU calibration parameters - calibrate IMU using calculate_IMU_error() in the void setup() to get these values, then comment out calculate_IMU_error()
-float AccErrorX = 0.13;
-float AccErrorY = -0.03;
-float AccErrorZ = -0.08;
-float GyroErrorX = 3.25;
-float GyroErrorY= -2.57;
-float GyroErrorZ = -0.76;
+float AccErrorX = 0.17;
+float AccErrorY = -0.07;
+float AccErrorZ = -0.02;
+float GyroErrorX = -0.64;
+float GyroErrorY= -2.56;
+float GyroErrorZ = -0.73;
 
 //Controller parameters (take note of defaults before modifying!): 
 float i_limit = 25.0;     //Integrator saturation level, mostly for safety (default 25.0)
@@ -193,6 +217,11 @@ float Kd_pitch_angle = 0.05;  //Pitch D-gain
 float Kp_yaw = 0.3;           //Yaw P-gain
 float Ki_yaw = 0.05;          //Yaw I-gain
 float Kd_yaw = 0.00015;       //Yaw D-gain
+
+float Kp_altitude = 15.0;         //Altitude P-gain
+float Ki_altitude = 10.0;         //Altitude I-gain
+float Kd_altitude = 2.0;          //Altitude D-gain
+float i_limit_altitude = 100.0;   //Integrator saturation level
 
 
 
@@ -219,6 +248,7 @@ void setup() {
 
   // Start in manual flight mode
   flightMode = MANUAL;
+  manualState = MANUAL_STARTUP;
 
   delay(5);
 
@@ -237,7 +267,7 @@ void setup() {
   IMUinit();
 
   // Initialize depth sensor
-  depthSensorInit();
+//  depthSensorInit();
 
   delay(5);
 
@@ -637,33 +667,63 @@ void getDesState() {
    * yaw_passthru variables, to be used in commanding motors/servos with direct unstabilized commands in controlMixer().
    */
 
-  switch (flightMode) {
-  case MANUAL:
-    getDesStateManual();
-    break;
-  case AUTONOMOUS:
-    getDesStateAuto();
-    break;
-  default:
-    getDesStateManual();
-    break;
-  }
+ // The outer state machine allows for toggling between flight modes, control of which is mapped to the radio transmitter
+ // The inner state machines for each flight mode are controlled by the computer
+ // The manual mode begins in STARTUP to set a few variables before transitioning into NORMAL for manual radio control
+ // The auto mode begins in STARTUP to set a few variables, then transitions between a sequence of pre-defined states to complete the autonomous mission
 
+  switch (flightMode) {
+    case MANUAL:
+      switch (manualState) {
+        case MANUAL_STARTUP:
+          missionState = AUTO_STARTUP;
+          manualState = NORMAL;
+          break;
+        case NORMAL:
+          break;
+        default:
+          break;
+      }
+      getDesStateManual();
+      break;
+    case AUTONOMOUS: 
+      switch (missionState) {
+        case AUTO_STARTUP:
+          integral_altitude_prev = 0.0;
+          error_altitude_prev = 0.0;
+          manualState = MANUAL_STARTUP;
+          missionState = HOVER;
+          break;
+        case HOVER:
+          break;
+        case LAND:
+          break;
+        default:
+          break;
+      }  
+      getDesStateAuto();
+      break;
+    default:
+      getDesStateManual();
+      break;
+  }
 }
 
 void getDesStateAuto() {
 
-  thro_des = (channel_1_pwm - 1000.0)/1000.0; //Between 0 and 1    TODO: Add PID Altitude controller here
+  // PID for Altitude Controller
+  error_altitude = altitude_des - USdistance;
+  integral_altitude = integral_altitude_prev + error_altitude*dt;
+  integral_altitude = constrain(integral_altitude, -i_limit_altitude, i_limit_altitude); //Saturate integrator to prevent unsafe buildup
+  derivative_altitude = (error_altitude - error_altitude_prev)/dt; 
+  altitude_PID = 0.00005*(Kp_altitude*error_altitude + Ki_altitude*integral_altitude - Kd_altitude*derivative_altitude); //Scaled by .00005 to bring within 0 to 1 range
 
-//  // PID for Altitude Controller
-//  error_altitude = altitude_des - distanceUS;
-//  integral_altitude = integral_altitude_prev + error_altitude*dt;
-//  integral_altitude = constrain(integral_altitude, -i_limit, i_limit); //Saturate integrator to prevent unsafe buildup
-//  derivative_altitude = XXXX-FIGURE-THIS-OUT-XXXX;
-//  altitude_PID = 0.01*(Kp_altitude*error_roll + Ki_altitude*integral_roll - Kd_altitude*derivative_roll); //Scaled by .01 to bring within -1 to 1 range
-//  integral_altitude_prev = integral_altitude; //Update 
-//
-//  thro_des = (hover_throttle - 1000.0)/1000.0 + altitude_PID;
+  // Update variables
+  integral_altitude_prev = integral_altitude;
+  error_altitude_prev = error_altitude;
+
+  // Set desired throttle value from altitude controller
+  thro_des = altitude_PID;
   
   roll_des = (channel_2_pwm - 1500.0)/500.0; //Between -1 and 1
   pitch_des = (channel_3_pwm - 1500.0)/500.0; //Between -1 and 1
@@ -1238,7 +1298,11 @@ void printFlightMode() {
   if (current_time - print_counter > 10000) {
     print_counter = micros();
     Serial.print(F("Flight Mode: "));
-    Serial.println(flightMode);
+    if (flightMode) {
+      Serial.println(F("Autonomous"));
+    } else {
+      Serial.println(F("Manual"));
+    }
   }
 }
 
