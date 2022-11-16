@@ -219,10 +219,10 @@ float Ki_yaw = 0.05;          //Yaw I-gain
 float Kd_yaw = 0.00015;       //Yaw D-gain
 
 float hover_throttle = 0.55;     //Baseline throttle for hovering
-float Kp_altitude = 2.0;         //Altitude P-gain
-float Ki_altitude = 10.0;         //Altitude I-gain
-float Kd_altitude = 2.0;         //Altitude D-gain
-float i_limit_altitude = 25.0;   //Integrator saturation level
+float Kp_altitude = 4.0;         //Altitude P-gain
+float Ki_altitude = 5.0;         //Altitude I-gain
+float Kd_altitude = 20.0;        //Altitude D-gain
+float i_limit_altitude = 35.0;   //Integrator saturation level
 
 
 
