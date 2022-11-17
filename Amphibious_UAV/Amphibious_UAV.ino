@@ -195,12 +195,12 @@ float B_gyro = 0.1;       //Gyro LP filter paramter, (MPU6050 default: 0.1. MPU9
 float B_mag = 1.0;        //Magnetometer LP filter parameter
 
 //IMU calibration parameters - calibrate IMU using calculate_IMU_error() in the void setup() to get these values, then comment out calculate_IMU_error()
-float AccErrorX = 0.17;
-float AccErrorY = -0.07;
-float AccErrorZ = -0.02;
-float GyroErrorX = -0.64;
-float GyroErrorY= -2.56;
-float GyroErrorZ = -0.73;
+float AccErrorX = 0.19;
+float AccErrorY = -0.05;
+float AccErrorZ = -0.01;
+float GyroErrorX = -0.91;
+float GyroErrorY= -2.71;
+float GyroErrorZ = -0.72;
 
 //Controller parameters (take note of defaults before modifying!): 
 float i_limit = 25.0;     //Integrator saturation level, mostly for safety (default 25.0)
@@ -218,11 +218,11 @@ float Kp_yaw = 0.3;           //Yaw P-gain
 float Ki_yaw = 0.05;          //Yaw I-gain
 float Kd_yaw = 0.00015;       //Yaw D-gain
 
-float hover_throttle = 0.55;     //Baseline throttle for hovering
-float Kp_altitude = 4.0;         //Altitude P-gain
-float Ki_altitude = 5.0;         //Altitude I-gain
-float Kd_altitude = 20.0;        //Altitude D-gain
-float i_limit_altitude = 35.0;   //Integrator saturation level
+float hover_throttle = 0.50;     //Baseline throttle for hovering
+float Kp_altitude = 2.5;         //Altitude P-gain
+float Ki_altitude = 1.0;         //Altitude I-gain
+float Kd_altitude = 25.0;        //Altitude D-gain
+float i_limit_altitude = 75.0;   //Integrator saturation level
 
 
 
