@@ -170,7 +170,7 @@ enum autoStates {
 enum autoStates missionState;
 
 // Motion Planning
-float altitude_des = 1000; // mm
+float altitude_des = 1370; // mm
 float depth_des = 0.0;
 float targetX = 0.0;
 float targetY = 0.0;
@@ -186,21 +186,20 @@ unsigned long channel_2_fs = 1500; //ail
 unsigned long channel_3_fs = 1500; //elev
 unsigned long channel_4_fs = 1500; //rudd
 unsigned long channel_5_fs = 2000; //greater than 1500 = throttle cut
-unsigned long channel_6_fs = 2000; //aux1
+unsigned long channel_6_fs = 1000; //less than 1500 = MANUAL flight mode
 
 //Filter parameters - Defaults tuned for 2kHz loop rate; Do not touch unless you know what you are doing:
 float B_madgwick = 0.04;  //Madgwick filter parameter
 float B_accel = 0.14;     //Accelerometer LP filter paramter, (MPU6050 default: 0.14. MPU9250 default: 0.2)
 float B_gyro = 0.1;       //Gyro LP filter paramter, (MPU6050 default: 0.1. MPU9250 default: 0.17)
-float B_mag = 1.0;        //Magnetometer LP filter parameter
 
 //IMU calibration parameters - calibrate IMU using calculate_IMU_error() in the void setup() to get these values, then comment out calculate_IMU_error()
-float AccErrorX = 0.19;
-float AccErrorY = -0.05;
-float AccErrorZ = -0.01;
-float GyroErrorX = -0.91;
-float GyroErrorY= -2.71;
-float GyroErrorZ = -0.72;
+float AccErrorX = 0.13;
+float AccErrorY = -0.02;
+float AccErrorZ = -0.04;
+float GyroErrorX = 0.73;
+float GyroErrorY= -2.57;
+float GyroErrorZ = -0.75;
 
 //Controller parameters (take note of defaults before modifying!): 
 float i_limit = 25.0;     //Integrator saturation level, mostly for safety (default 25.0)
@@ -218,11 +217,11 @@ float Kp_yaw = 0.3;           //Yaw P-gain
 float Ki_yaw = 0.05;          //Yaw I-gain
 float Kd_yaw = 0.00015;       //Yaw D-gain
 
-float hover_throttle = 0.50;     //Baseline throttle for hovering
-float Kp_altitude = 2.5;         //Altitude P-gain
-float Ki_altitude = 1.0;         //Altitude I-gain
-float Kd_altitude = 25.0;        //Altitude D-gain
-float i_limit_altitude = 75.0;   //Integrator saturation level
+float hover_throttle = 0.525;     //Baseline throttle for hovering
+float Kp_altitude = 0.60;         //Altitude P-gain
+float Ki_altitude = 0.00;         //Altitude I-gain
+float Kd_altitude = 0.0;        //Altitude D-gain
+float i_limit_altitude = 10000.0;   //Integrator saturation level
 
 
 
@@ -321,6 +320,7 @@ void loop() {
   //printDepth();         //Prints depth measurements from the BlueRobotics depth sensor
   //printPIDoutput();     //Prints computed stabilized PID variables from controller and desired setpoint (expected: ~ -1 to 1)
   //printMotorCommands(); //Prints the values being written to the motors (expected: 120 to 250)
+  //printMotorCommandsScaled(); //Prints the scaled motor commands (expected: 0 to 1)
   //printServoCommands(); //Prints the values being written to the servos (expected: 0 to 180)
   //printLoopRate();      //Prints the time between loops in microseconds (expected: microseconds between loop iterations)
 
@@ -1263,7 +1263,21 @@ void printMotorCommands() {
     Serial.print(F(" m3_command: "));
     Serial.print(m3_command_PWM);
     Serial.print(F(" m4_command: "));
-    Serial.print(m4_command_PWM);
+    Serial.println(m4_command_PWM);
+  }
+}
+
+void printMotorCommandsScaled() {
+  if (current_time - print_counter > 10000) {
+    print_counter = micros();
+    Serial.print(F("m1_command: "));
+    Serial.print(m1_command_scaled);
+    Serial.print(F(" m2_command: "));
+    Serial.print(m2_command_scaled);
+    Serial.print(F(" m3_command: "));
+    Serial.print(m3_command_scaled);
+    Serial.print(F(" m4_command: "));
+    Serial.println(m4_command_scaled);
   }
 }
 
