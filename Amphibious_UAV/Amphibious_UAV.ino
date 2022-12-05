@@ -19,7 +19,6 @@
 
 SoftwareSerial USSerial(15, 14); // RX, TX
 MPU6050 mpu6050;
-
 MS5837 ms5837;
 
 // Select gyro full scale range (deg/sec)
@@ -176,6 +175,7 @@ float targetX = 0.0;
 float targetY = 0.0;
 
 
+
 //========================================================================================================================//
 //                                               CONTROLLER VARIABLES                                                     //                           
 //========================================================================================================================//
@@ -194,12 +194,12 @@ float B_accel = 0.14;     //Accelerometer LP filter paramter, (MPU6050 default: 
 float B_gyro = 0.1;       //Gyro LP filter paramter, (MPU6050 default: 0.1. MPU9250 default: 0.17)
 
 //IMU calibration parameters - calibrate IMU using calculate_IMU_error() in the void setup() to get these values, then comment out calculate_IMU_error()
-float AccErrorX = 0.13;
-float AccErrorY = -0.02;
-float AccErrorZ = -0.04;
-float GyroErrorX = 0.73;
-float GyroErrorY= -2.57;
-float GyroErrorZ = -0.75;
+float AccErrorX = 0.09;
+float AccErrorY = 0.02;
+float AccErrorZ = -0.10;
+float GyroErrorX = -2.38;
+float GyroErrorY = 0.34;
+float GyroErrorZ = -2.06;
 
 //Controller parameters (take note of defaults before modifying!): 
 float i_limit = 25.0;     //Integrator saturation level, mostly for safety (default 25.0)
@@ -267,12 +267,12 @@ void setup() {
   IMUinit();
 
   // Initialize depth sensor
-//  depthSensorInit();
+  depthSensorInit();
 
   delay(5);
 
   // Get IMU error to zero accelerometer and gyro readings, assuming vehicle is level when powered up
-  //calculate_IMU_error(); // Calibration parameters printed to serial monitor. Paste these in the user specified variables section, then comment this out forever.
+  calculate_IMU_error(); // Calibration parameters printed to serial monitor. Paste these in the user specified variables section, then comment this out forever.
 
   // Arm servo channels
   servo1.write(0); // Command servo angle from 0-180 degrees (1000 to 2000 PWM)
@@ -331,7 +331,7 @@ void loop() {
   // Get altitude (sampling at 10 Hz bc can't handle 2 kHz)
   slowLoopCounter++;
   if (slowLoopCounter == 100) {
-    getDepth();   //Gets depth measurement from BlueRobotics depth sensor. This is slow (40ms according to library), might be a problem.
+    //getDepth();   //Gets depth measurement from BlueRobotics depth sensor. This is slow (40ms according to library), might be a problem.
   } else if (slowLoopCounter == 200) {
     getUSdata();  //Gets altitude measurement from A0221AU ultrasonic rangefinder
     slowLoopCounter = 0;
