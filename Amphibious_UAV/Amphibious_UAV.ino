@@ -15,10 +15,10 @@
 #include <SoftwareSerial.h>           // Serial communication
 #include <PWMServo.h>                 // Commanding any extra actuators, installed with teensyduino installer
 #include "src/MPU6050/MPU6050.h"      // MPU-6050 IMU
-//#include "MS5837.h"                 // BlueRobotics Bar30 Depth Sensor
+#include "src/MS5837/MS5837.h"        // BlueRobotics Bar30 Depth Sensor
 
 MPU6050 mpu6050;
-//MS5837 ms5837;
+MS5837 ms5837;
 
 // Select gyro full scale range (deg/sec)
 #define GYRO_250DPS //Default
@@ -458,20 +458,20 @@ void IMUinit() {
     
 }
 
-//void depthSensorInit() {
-//  
-//  Wire1.begin();
-//
-//  if (ms5837.init() == false) {
-//    Serial.println("MS5837 initialization unsuccessful");
-//    Serial.println("Check wiring or try cycling power");
-//    Serial.println("Blue Robotics Bar30: White=SDA, Green=SCL");
-//    while(1) {}
-//  }
-//  
-//  ms5837.setModel(MS5837::MS5837_30BA);
-//  ms5837.setFluidDensity(997); // kg/m^3 (freshwater, 1029 for seawater)
-//}
+void depthSensorInit() {
+  
+  Wire1.begin();
+
+  if (ms5837.init() == false) {
+    Serial.println("MS5837 initialization unsuccessful");
+    Serial.println("Check wiring or try cycling power");
+    Serial.println("Blue Robotics Bar30: White=SDA, Green=SCL");
+    while(1) {}
+  }
+  
+  ms5837.setModel(MS5837::MS5837_30BA);
+  ms5837.setFluidDensity(997); // kg/m^3 (freshwater, 1029 for seawater)
+}
 
 void getIMUdata() {
   //DESCRIPTION: Request full dataset from IMU and LP filter gyro, accelerometer, and magnetometer data
@@ -521,10 +521,10 @@ void getIMUdata() {
 
 }
 
-//void getDepth() {
-//  ms5837.read();
-//  depth = ms5837.depth();
-//}
+void getDepth() {
+  ms5837.read();
+  depth = ms5837.depth();
+}
 
 void calculate_IMU_error() {
   //DESCRIPTION: Computes IMU accelerometer and gyro error on startup. Note: vehicle should be powered up on flat surface
