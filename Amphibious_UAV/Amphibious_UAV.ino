@@ -15,10 +15,10 @@
 #include <SoftwareSerial.h>           // Serial communication
 #include <PWMServo.h>                 // Commanding any extra actuators, installed with teensyduino installer
 #include "src/MPU6050/MPU6050.h"      // MPU-6050 IMU
-#include "MS5837.h"                   // BlueRobotics Bar30 Depth Sensor
+//#include "MS5837.h"                 // BlueRobotics Bar30 Depth Sensor
 
 MPU6050 mpu6050;
-MS5837 ms5837;
+//MS5837 ms5837;
 
 // Select gyro full scale range (deg/sec)
 #define GYRO_250DPS //Default
@@ -95,7 +95,6 @@ PWMServo servo2;
 
 // Software Serial ports
 SoftwareSerial USSerial(15, 14); // RX, TX
-SoftwareSerial CamSerial(8, 9);  // RX, TX
 
 // GLOBAL VARIABLE DECLARATIONS
 
@@ -133,6 +132,11 @@ float depth;
 // Tracking Camera Localization
 float curr_posX;
 float curr_posY;
+uint8_t upperX;
+uint8_t lowerX;
+uint8_t upperY;
+uint8_t lowerY;
+boolean newPosData = false;
 
 // Normalized desired state
 float thro_des, roll_des, pitch_des, yaw_des;
@@ -142,6 +146,7 @@ float error_roll, error_roll_prev, roll_des_prev, integral_roll, integral_roll_i
 float error_pitch, error_pitch_prev, pitch_des_prev, integral_pitch, integral_pitch_il, integral_pitch_ol, integral_pitch_prev, integral_pitch_prev_il, integral_pitch_prev_ol, derivative_pitch, pitch_PID = 0;
 float error_yaw, error_yaw_prev, integral_yaw, integral_yaw_prev, derivative_yaw, yaw_PID = 0;
 float error_altitude, error_altitude_prev, altitude_des_prev, integral_altitude, integral_altitude_prev, derivative_altitude, altitude_PID = 0;
+float error_posX, error_posY, posX_control, posY_control = 0;
 
 // Mixer
 float m1_command_scaled, m2_command_scaled, m3_command_scaled, m4_command_scaled;
@@ -166,7 +171,7 @@ enum manualStates {
 enum manualStates manualState;
 
 // Auto Mode Mission Enumeration
-enum autoStates (
+enum autoStates {
   AUTO_STARTUP, // Initilaization
   TAKEOFF1,     // Take off from start position on Side A
   FORWARD1,     // Fly forward to above pool on Side A
@@ -184,7 +189,7 @@ enum autoStates (
   FORWARD2,     // Fly forward to above starting position
   LAND3,        // Land at starting position
   STOP          // End autonomous mission
-);
+};
 
 enum autoStates missionState;
 
@@ -257,7 +262,7 @@ float Kp_position = 0.1;  // Full angle at 10m away from target
 void setup() {
   Serial.begin(500000); //USB Serial
   USSerial.begin(9600); // Ultrasonic rangefinder
-  CamSerial.begin(9600); // Tracking camera
+  Serial2.begin(9600);  // Tracking camera
   delay(500);
   
   // Initialize all pins
@@ -293,12 +298,12 @@ void setup() {
   IMUinit();
 
   // Initialize depth sensor
-  depthSensorInit();
+  //depthSensorInit();
 
   delay(5);
 
   // Get IMU error to zero accelerometer and gyro readings, assuming vehicle is level when powered up
-  calculate_IMU_error(); // Calibration parameters printed to serial monitor. Paste these in the user specified variables section, then comment this out forever.
+  //calculate_IMU_error(); // Calibration parameters printed to serial monitor. Paste these in the user specified variables section, then comment this out forever.
 
   // Arm servo channels
   servo1.write(0); // Command servo angle from 0-180 degrees (1000 to 2000 PWM)
@@ -344,6 +349,7 @@ void loop() {
   //printRollPitchYaw();  //Prints roll, pitch, and yaw angles in degrees from Madgwick filter (expected: degrees, 0 when level)
   //printAltitude();      //Prints altitude measurements from ultrasonic rangefinder
   //printDepth();         //Prints depth measurements from the BlueRobotics depth sensor
+  printPosition();       // Prints X-Y position from Intel RealSense T265 Tracking Camera
   //printPIDoutput();     //Prints computed stabilized PID variables from controller and desired setpoint (expected: ~ -1 to 1)
   //printMotorCommands(); //Prints the values being written to the motors (expected: 120 to 250)
   //printMotorCommandsScaled(); //Prints the scaled motor commands (expected: 0 to 1)
@@ -355,11 +361,12 @@ void loop() {
   Madgwick(GyroX, -GyroY, -GyroZ, -AccX, AccY, AccZ, dt); //Updates roll_IMU, pitch_IMU, and yaw_IMU angle estimates (degrees)
 
   // Get vehicle position (from tracking camera)
-  getCameraData();
-
+  recvCamSerial();
+  getCamData(); 
+  
   // Get altitude (sampling at 10 Hz bc can't handle 2 kHz)
   slowLoopCounter++;
-  if (slowLoopCounter == 100) {
+  if (slowLoopCounter == 100) { 
     //getDepth();   //Gets depth measurement from BlueRobotics depth sensor. This is slow (40ms according to library), might be a problem.
   } else if (slowLoopCounter == 200) {
     getUSdata();  //Gets altitude measurement from A0221AU ultrasonic rangefinder
@@ -451,20 +458,20 @@ void IMUinit() {
     
 }
 
-void depthSensorInit() {
-  
-  Wire1.begin();
-
-  if (ms5837.init() == false) {
-    Serial.println("MS5837 initialization unsuccessful");
-    Serial.println("Check wiring or try cycling power");
-    Serial.println("Blue Robotics Bar30: White=SDA, Green=SCL");
-    while(1) {}
-  }
-  
-  ms5837.setModel(MS5837::MS5837_30BA);
-  ms5837.setFluidDensity(997); // kg/m^3 (freshwater, 1029 for seawater)
-}
+//void depthSensorInit() {
+//  
+//  Wire1.begin();
+//
+//  if (ms5837.init() == false) {
+//    Serial.println("MS5837 initialization unsuccessful");
+//    Serial.println("Check wiring or try cycling power");
+//    Serial.println("Blue Robotics Bar30: White=SDA, Green=SCL");
+//    while(1) {}
+//  }
+//  
+//  ms5837.setModel(MS5837::MS5837_30BA);
+//  ms5837.setFluidDensity(997); // kg/m^3 (freshwater, 1029 for seawater)
+//}
 
 void getIMUdata() {
   //DESCRIPTION: Request full dataset from IMU and LP filter gyro, accelerometer, and magnetometer data
@@ -514,10 +521,10 @@ void getIMUdata() {
 
 }
 
-void getDepth() {
-  ms5837.read();
-  depth = ms5837.depth();
-}
+//void getDepth() {
+//  ms5837.read();
+//  depth = ms5837.depth();
+//}
 
 void calculate_IMU_error() {
   //DESCRIPTION: Computes IMU accelerometer and gyro error on startup. Note: vehicle should be powered up on flat surface
@@ -723,22 +730,22 @@ void getDesState() {
           manualState = MANUAL_STARTUP; // Reset MANUAL mode state machine
           missionState = TAKEOFF1;      
           setTargetAltitude(1.5);
-          setTargetPosition(0.0, 0.0);
+          setTargetPos(0.0, 0.0);
           break;
         case TAKEOFF1:
-          if reachedPosition() {
+          if (reachedTarget()) {
             missionState = FORWARD1;
             setTargetPos(5.0, 0.0);
           }
           break;
         case FORWARD1:
-          if reachedPosition() {
+          if (reachedTarget()) {
             missionState = LAND1;
             setTargetAltitude(0.0);
           }
           break;
         case LAND1:
-          if reachedDesiredPosition() {
+          if (reachedTarget()) {
             missionState = STOP;
             motorsOff = true;
           }
@@ -1192,14 +1199,53 @@ void getUSdata() {
    }
 }
 
-void getCameraData() {
-  if (CamSerial.available() > 0) {
-    curr_posX = CamSerial.parseFloat();
-    curr_posY = CamSerial.parseFloat();
+void getCamData() {
+    if (newPosData == true) {
+      int posX = (upperX << 8) + lowerX;
+      if(posX > 0x8000) posX = 0xFFFF - posX;
+      curr_posX = float(posX)/1000.0;
+      int posY = (upperY << 8) + lowerY;
+      if(posY > 0x8000) posY = -(0xFFFE - posY);
+      curr_posY = float(posY)/1000.0;
+      newPosData = false;
+    }
+}
+
+void recvCamSerial() {
+  static boolean recvInProgress = false;
+  static byte ndx = 0;
+  char startMarker = '<';
+  uint8_t inByte;
+
+  while (Serial2.available() > 0 && newPosData == false) {
+    inByte = Serial2.read();
+
+    if (recvInProgress == true) {
+      switch (ndx) {
+        case 0:
+          upperX = inByte;
+          ndx++;
+          break;
+        case 1:
+          lowerX = inByte;
+          ndx++;
+          break;
+        case 2:
+          upperY = inByte;
+          ndx++;
+          break;
+        case 3:
+          lowerY = inByte;
+          recvInProgress = false;
+          newPosData = true;
+          ndx = 0;
+          break;
+      }
+    }
+    else if (inByte == startMarker) {
+      recvInProgress = true;
+    }
   }
-  
-  curr_posX = 0.0;
-  curr_posY = 0.0;
 }
 
 // Set target altitude in meters
@@ -1213,7 +1259,7 @@ void setTargetDepth(float depth) {
 }
 
 // Set target (X,Y) position in meters
-void setTargetPosition(float posX, float posY) {
+void setTargetPos(float posX, float posY) {
   target_posX = posX;
   target_posY = posY;
 }
@@ -1404,6 +1450,17 @@ void printDepth() {
     print_counter = micros();
     Serial.print(F("Depth: "));
     Serial.print(depth);
+    Serial.println(F(" m"));
+  }
+}
+
+void printPosition() {
+  if (current_time - print_counter > 10000) {
+    print_counter = micros();
+    Serial.print(F("X-Position: "));
+    Serial.print(curr_posX);
+    Serial.print(F(" m     Y-Position: "));
+    Serial.print(curr_posY);
     Serial.println(F(" m"));
   }
 }
