@@ -13,11 +13,10 @@
 #include <Wire.h>                     // I2C communication
 #include <SPI.h>                      // SPI communication
 #include <SoftwareSerial.h>           // Serial communication
-#include <PWMServo.h>                 //Commanding any extra actuators, installed with teensyduino installer
+#include <PWMServo.h>                 // Commanding any extra actuators, installed with teensyduino installer
 #include "src/MPU6050/MPU6050.h"      // MPU-6050 IMU
-#include "MS5837.h"                   // BlueRobotics Bar30 Depth Sensor
+#include "src/MS5837/MS5837.h"        // BlueRobotics Bar30 Depth Sensor
 
-SoftwareSerial USSerial(15, 14); // RX, TX
 MPU6050 mpu6050;
 MS5837 ms5837;
 
@@ -94,6 +93,9 @@ const int servo2Pin = 7;
 PWMServo servo1;
 PWMServo servo2;
 
+// Software Serial ports
+SoftwareSerial USSerial(15, 14); // RX, TX
+
 // GLOBAL VARIABLE DECLARATIONS
 
 // General stuff
@@ -127,15 +129,24 @@ float USdistance;
 // BlueRobotics Depth Sensor
 float depth;
 
+// Tracking Camera Localization
+float curr_posX;
+float curr_posY;
+uint8_t upperX;
+uint8_t lowerX;
+uint8_t upperY;
+uint8_t lowerY;
+boolean newPosData = false;
+
 // Normalized desired state
 float thro_des, roll_des, pitch_des, yaw_des;
-float roll_passthru, pitch_passthru, yaw_passthru;
 
 // Controller
 float error_roll, error_roll_prev, roll_des_prev, integral_roll, integral_roll_il, integral_roll_ol, integral_roll_prev, integral_roll_prev_il, integral_roll_prev_ol, derivative_roll, roll_PID = 0;
 float error_pitch, error_pitch_prev, pitch_des_prev, integral_pitch, integral_pitch_il, integral_pitch_ol, integral_pitch_prev, integral_pitch_prev_il, integral_pitch_prev_ol, derivative_pitch, pitch_PID = 0;
 float error_yaw, error_yaw_prev, integral_yaw, integral_yaw_prev, derivative_yaw, yaw_PID = 0;
 float error_altitude, error_altitude_prev, altitude_des_prev, integral_altitude, integral_altitude_prev, derivative_altitude, altitude_PID = 0;
+float error_posX, error_posY, posX_control, posY_control = 0;
 
 // Mixer
 float m1_command_scaled, m2_command_scaled, m3_command_scaled, m4_command_scaled;
@@ -159,20 +170,36 @@ enum manualStates {
 
 enum manualStates manualState;
 
-// Auto Mode States Enumeration
+// Auto Mode Mission Enumeration
 enum autoStates {
-  AUTO_STARTUP,
-  HOVER,
-  LAND
+  AUTO_STARTUP, // Initilaization
+  TAKEOFF1,     // Take off from start position on Side A
+  FORWARD1,     // Fly forward to above pool on Side A
+  LAND1,        // Land on water surface near Side A
+  DIVE1,        // Dive underwater near Side A
+  UNDERWATER1,  // Travel underwater from Side A to Side B
+  SURFACE1,     // Surface near Side B
+  TAKEOFF2,     // Take off from water near Side B
+  HOVER,        // Perform some task - TBD
+  LAND2,        // Land on water surface near side B
+  DIVE2,        // Dive underwater near Side B
+  UNDERWATER2,  // Travel underwater from Side B to Side A
+  SURFACE2,     // Surface near Side A
+  TAKEOFF3,     // Take off from water near side A
+  FORWARD2,     // Fly forward to above starting position
+  LAND3,        // Land at starting position
+  STOP          // End autonomous mission
 };
 
 enum autoStates missionState;
 
 // Motion Planning
-float altitude_des = 1370; // mm
+const float POS_DB_RADIUS = 0.25; // Deadband radius for evaluating reached position targets
+boolean motorsOff = false;
+float altitude_des = 0.0; // mm
 float depth_des = 0.0;
-float targetX = 0.0;
-float targetY = 0.0;
+float target_posX = 0.0; // meters
+float target_posY = 0.0; // meters
 
 
 
@@ -201,12 +228,13 @@ float GyroErrorX = -2.38;
 float GyroErrorY = 0.34;
 float GyroErrorZ = -2.06;
 
-//Controller parameters (take note of defaults before modifying!): 
-float i_limit = 25.0;     //Integrator saturation level, mostly for safety (default 25.0)
+// General controller variables
 float maxRoll = 30.0;     //Max roll angle in degrees for angle mode (maximum ~70 degrees), deg/sec for rate mode 
 float maxPitch = 30.0;    //Max pitch angle in degrees for angle mode (maximum ~70 degrees), deg/sec for rate mode
 float maxYaw = 160.0;     //Max yaw rate in deg/sec
 
+// Stabilization controller variables
+float i_limit = 25.0;         //Integrator saturation level, mostly for safety (default 25.0)
 float Kp_roll_angle = 0.2;    //Roll P-gain
 float Ki_roll_angle = 0.3;    //Roll I-gain
 float Kd_roll_angle = 0.05;   //Roll D-gain
@@ -217,21 +245,24 @@ float Kp_yaw = 0.3;           //Yaw P-gain
 float Ki_yaw = 0.05;          //Yaw I-gain
 float Kd_yaw = 0.00015;       //Yaw D-gain
 
+// Altitude controller variables
 float hover_throttle = 0.525;       //Baseline throttle for hovering
 float Kp_altitude = 1.0;            //Altitude P-gain
 float Ki_altitude = 0.2;            //Altitude I-gain
 float Kd_altitude = 0.5;            //Altitude D-gain
 float i_limit_altitude = 10000.0;   //Integrator saturation level
 
-
+// Position controller variables
+float Kp_position = 0.1;  // Full angle at 10m away from target
 
 //========================================================================================================================//
 //                                                      SETUP FUNCTION                                                    //                           
 //========================================================================================================================//
 
 void setup() {
-  Serial.begin(500000); //USB serial
-  USSerial.begin(9600); 
+  Serial.begin(500000); //USB Serial
+  USSerial.begin(9600); // Ultrasonic rangefinder
+  Serial2.begin(9600);  // Tracking camera
   delay(500);
   
   // Initialize all pins
@@ -267,12 +298,12 @@ void setup() {
   IMUinit();
 
   // Initialize depth sensor
-  depthSensorInit();
+  //depthSensorInit();
 
   delay(5);
 
   // Get IMU error to zero accelerometer and gyro readings, assuming vehicle is level when powered up
-  calculate_IMU_error(); // Calibration parameters printed to serial monitor. Paste these in the user specified variables section, then comment this out forever.
+  //calculate_IMU_error(); // Calibration parameters printed to serial monitor. Paste these in the user specified variables section, then comment this out forever.
 
   // Arm servo channels
   servo1.write(0); // Command servo angle from 0-180 degrees (1000 to 2000 PWM)
@@ -318,6 +349,7 @@ void loop() {
   //printRollPitchYaw();  //Prints roll, pitch, and yaw angles in degrees from Madgwick filter (expected: degrees, 0 when level)
   //printAltitude();      //Prints altitude measurements from ultrasonic rangefinder
   //printDepth();         //Prints depth measurements from the BlueRobotics depth sensor
+  printPosition();       // Prints X-Y position from Intel RealSense T265 Tracking Camera
   //printPIDoutput();     //Prints computed stabilized PID variables from controller and desired setpoint (expected: ~ -1 to 1)
   //printMotorCommands(); //Prints the values being written to the motors (expected: 120 to 250)
   //printMotorCommandsScaled(); //Prints the scaled motor commands (expected: 0 to 1)
@@ -328,9 +360,13 @@ void loop() {
   getIMUdata(); //Pulls raw gyro, accelerometer, and magnetometer data from IMU and LP filters to remove noise
   Madgwick(GyroX, -GyroY, -GyroZ, -AccX, AccY, AccZ, dt); //Updates roll_IMU, pitch_IMU, and yaw_IMU angle estimates (degrees)
 
+  // Get vehicle position (from tracking camera)
+  recvCamSerial();
+  getCamData(); 
+  
   // Get altitude (sampling at 10 Hz bc can't handle 2 kHz)
   slowLoopCounter++;
-  if (slowLoopCounter == 100) {
+  if (slowLoopCounter == 100) { 
     //getDepth();   //Gets depth measurement from BlueRobotics depth sensor. This is slow (40ms according to library), might be a problem.
   } else if (slowLoopCounter == 200) {
     getUSdata();  //Gets altitude measurement from A0221AU ultrasonic rangefinder
@@ -380,14 +416,12 @@ void controlMixer() {
    * Takes roll_PID, pitch_PID, and yaw_PID computed from the PID controller and appropriately mixes them for the desired
    * vehicle configuration. For example on a quadcopter, the left two motors should have +roll_PID while the right two motors
    * should have -roll_PID. Front two should have -pitch_PID and the back two should have +pitch_PID etc... every motor has
-   * normalized (0 to 1) thro_des command for throttle control. Can also apply direct unstabilized commands from the transmitter with 
-   * roll_passthru, pitch_passthru, and yaw_passthu. mX_command_scaled and sX_command scaled variables are used in scaleCommands() 
+   * normalized (0 to 1) thro_des command for throttle control.
    * in preparation to be sent to the motor ESCs and servos.
    * 
    *Relevant variables:
    *thro_des - direct thottle control
    *roll_PID, pitch_PID, yaw_PID - stabilized axis variables
-   *roll_passthru, pitch_passthru, yaw_passthru - direct unstabilized command passthrough
    *channel_6_pwm - free auxillary channel, can be used to toggle things with an 'if' statement
    */
    
@@ -664,8 +698,7 @@ void getDesState() {
    * Updates the desired state variables thro_des, roll_des, pitch_des, and yaw_des. These are computed by using the raw
    * RC pwm commands and scaling them to be within our limits defined in setup. thro_des stays within 0 to 1 range.
    * roll_des and pitch_des are scaled to be within max roll/pitch amount in either degrees (angle mode) or degrees/sec
-   * (rate mode). yaw_des is scaled to be within max yaw in degrees/sec. Also creates roll_passthru, pitch_passthru, and
-   * yaw_passthru variables, to be used in commanding motors/servos with direct unstabilized commands in controlMixer().
+   * (rate mode). yaw_des is scaled to be within max yaw in degrees/sec.
    */
 
  // The outer state machine allows for toggling between flight modes, control of which is mapped to the radio transmitter
@@ -677,7 +710,8 @@ void getDesState() {
     case MANUAL:
       switch (manualState) {
         case MANUAL_STARTUP:
-          missionState = AUTO_STARTUP;
+          motorsOff = false;
+          missionState = AUTO_STARTUP; // Reset AUTO mode state machine
           manualState = NORMAL;
           break;
         case NORMAL:
@@ -692,12 +726,55 @@ void getDesState() {
         case AUTO_STARTUP:
           integral_altitude_prev = 0.0;
           error_altitude_prev = 0.0;
-          manualState = MANUAL_STARTUP;
-          missionState = HOVER;
+          motorsOff = false;
+          manualState = MANUAL_STARTUP; // Reset MANUAL mode state machine
+          missionState = TAKEOFF1;      
+          setTargetAltitude(1.5);
+          setTargetPos(0.0, 0.0);
+          break;
+        case TAKEOFF1:
+          if (reachedTarget()) {
+            missionState = FORWARD1;
+            setTargetPos(5.0, 0.0);
+          }
+          break;
+        case FORWARD1:
+          if (reachedTarget()) {
+            missionState = LAND1;
+            setTargetAltitude(0.0);
+          }
+          break;
+        case LAND1:
+          if (reachedTarget()) {
+            missionState = STOP;
+            motorsOff = true;
+          }
+          break;
+        case DIVE1:
+          break;
+        case UNDERWATER1:
+          break;
+        case SURFACE1:
+          break;
+        case TAKEOFF2:
           break;
         case HOVER:
           break;
-        case LAND:
+        case LAND2:
+          break;
+        case DIVE2:
+          break;
+        case UNDERWATER2:
+          break;
+        case SURFACE2:
+          break;
+        case TAKEOFF3:
+          break;
+        case FORWARD2:
+          break;
+        case LAND3:
+          break;
+        case STOP:
           break;
         default:
           break;
@@ -712,7 +789,7 @@ void getDesState() {
 
 void getDesStateAuto() {
 
-  // PID for Altitude Controller
+  // PID Altitude Controller
   error_altitude = altitude_des - USdistance;
   integral_altitude = integral_altitude_prev + error_altitude*dt;
   integral_altitude = constrain(integral_altitude, -i_limit_altitude, i_limit_altitude); //Saturate integrator to prevent unsafe buildup
@@ -723,24 +800,27 @@ void getDesStateAuto() {
   integral_altitude_prev = integral_altitude;
   error_altitude_prev = error_altitude;
 
+  // Proportional Position Controller
+  error_posX = target_posX - curr_posX;
+  error_posY = target_posY - curr_posY;
+  posX_control = Kp_position*error_posX;
+  posY_control = Kp_position*error_posY;
+
   // Set desired throttle value from altitude controller
   thro_des = hover_throttle + altitude_PID;
-  
-  roll_des = (channel_2_pwm - 1500.0)/500.0; //Between -1 and 1
-  pitch_des = (channel_3_pwm - 1500.0)/500.0; //Between -1 and 1
-  yaw_des = (channel_4_pwm - 1500.0)/500.0; //Between -1 and 1
-  roll_passthru = roll_des/2.0; //Between -0.5 and 0.5
-  pitch_passthru = pitch_des/2.0; //Between -0.5 and 0.5
-  yaw_passthru = yaw_des/2.0; //Between -0.5 and 0.5
+
+  // TODO: Check conventions to confirm that X and Y are correctly mapped to pitch and roll axes
+
+  // Set desired roll and pitch angles from position controller
+  roll_des = posY_control ; //Between -1 and 1
+  pitch_des = posX_control; //Between -1 and 1
+  yaw_des = 0;
   
   //Constrain within normalized bounds
   thro_des = constrain(thro_des, 0.0, 1.0); //Between 0 and 1
   roll_des = constrain(roll_des, -1.0, 1.0)*maxRoll; //Between -maxRoll and +maxRoll
   pitch_des = constrain(pitch_des, -1.0, 1.0)*maxPitch; //Between -maxPitch and +maxPitch
   yaw_des = constrain(yaw_des, -1.0, 1.0)*maxYaw; //Between -maxYaw and +maxYaw
-  roll_passthru = constrain(roll_passthru, -0.5, 0.5);
-  pitch_passthru = constrain(pitch_passthru, -0.5, 0.5);
-  yaw_passthru = constrain(yaw_passthru, -0.5, 0.5);
   
 }
 
@@ -750,18 +830,12 @@ void getDesStateManual() {
   roll_des = (channel_2_pwm - 1500.0)/500.0; //Between -1 and 1
   pitch_des = (channel_3_pwm - 1500.0)/500.0; //Between -1 and 1
   yaw_des = (channel_4_pwm - 1500.0)/500.0; //Between -1 and 1
-  roll_passthru = roll_des/2.0; //Between -0.5 and 0.5
-  pitch_passthru = pitch_des/2.0; //Between -0.5 and 0.5
-  yaw_passthru = yaw_des/2.0; //Between -0.5 and 0.5
   
   //Constrain within normalized bounds
   thro_des = constrain(thro_des, 0.0, 1.0); //Between 0 and 1
   roll_des = constrain(roll_des, -1.0, 1.0)*maxRoll; //Between -maxRoll and +maxRoll
   pitch_des = constrain(pitch_des, -1.0, 1.0)*maxPitch; //Between -maxPitch and +maxPitch
   yaw_des = constrain(yaw_des, -1.0, 1.0)*maxYaw; //Between -maxYaw and +maxYaw
-  roll_passthru = constrain(roll_passthru, -0.5, 0.5);
-  pitch_passthru = constrain(pitch_passthru, -0.5, 0.5);
-  yaw_passthru = constrain(yaw_passthru, -0.5, 0.5);
   
 }
 
@@ -1086,7 +1160,7 @@ void throttleCut() {
    * called before commandMotors() is called so that the last thing checked is if the user is giving permission to command
    * the motors to anything other than minimum value. Safety first. 
    */
-  if (channel_5_pwm > 1500) {
+  if (channel_5_pwm > 1500 || motorsOff) {
     m1_command_PWM = 120;
     m2_command_PWM = 120;
     m3_command_PWM = 120;
@@ -1123,6 +1197,77 @@ void getUSdata() {
         }
       }
    }
+}
+
+void getCamData() {
+    if (newPosData == true) {
+      int posX = (upperX << 8) + lowerX;
+      if(posX > 0x8000) posX = 0xFFFF - posX;
+      curr_posX = float(posX)/1000.0;
+      int posY = (upperY << 8) + lowerY;
+      if(posY > 0x8000) posY = -(0xFFFE - posY);
+      curr_posY = float(posY)/1000.0;
+      newPosData = false;
+    }
+}
+
+void recvCamSerial() {
+  static boolean recvInProgress = false;
+  static byte ndx = 0;
+  char startMarker = '<';
+  uint8_t inByte;
+
+  while (Serial2.available() > 0 && newPosData == false) {
+    inByte = Serial2.read();
+
+    if (recvInProgress == true) {
+      switch (ndx) {
+        case 0:
+          upperX = inByte;
+          ndx++;
+          break;
+        case 1:
+          lowerX = inByte;
+          ndx++;
+          break;
+        case 2:
+          upperY = inByte;
+          ndx++;
+          break;
+        case 3:
+          lowerY = inByte;
+          recvInProgress = false;
+          newPosData = true;
+          ndx = 0;
+          break;
+      }
+    }
+    else if (inByte == startMarker) {
+      recvInProgress = true;
+    }
+  }
+}
+
+// Set target altitude in meters
+void setTargetAltitude(float alt) {
+  altitude_des = alt*1000; // convert meters to mm
+}
+
+// Set target depth in meters
+void setTargetDepth(float depth) {
+  depth_des = depth;
+}
+
+// Set target (X,Y) position in meters
+void setTargetPos(float posX, float posY) {
+  target_posX = posX;
+  target_posY = posY;
+}
+
+boolean reachedTarget() {
+  return abs(target_posX - curr_posX) < POS_DB_RADIUS 
+    && abs(target_posY - curr_posY) < POS_DB_RADIUS
+    && abs(altitude_des - USdistance) < POS_DB_RADIUS;
 }
 
 void loopRate(int freq) {
@@ -1305,6 +1450,17 @@ void printDepth() {
     print_counter = micros();
     Serial.print(F("Depth: "));
     Serial.print(depth);
+    Serial.println(F(" m"));
+  }
+}
+
+void printPosition() {
+  if (current_time - print_counter > 10000) {
+    print_counter = micros();
+    Serial.print(F("X-Position: "));
+    Serial.print(curr_posX);
+    Serial.print(F(" m     Y-Position: "));
+    Serial.print(curr_posY);
     Serial.println(F(" m"));
   }
 }
