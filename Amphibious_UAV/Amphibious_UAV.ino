@@ -173,21 +173,9 @@ enum manualStates manualState;
 // Auto Mode Mission Enumeration
 enum autoStates {
   AUTO_STARTUP, // Initilaization
-  TAKEOFF1,     // Take off from start position on Side A
-  FORWARD1,     // Fly forward to above pool on Side A
-  LAND1,        // Land on water surface near Side A
-  DIVE1,        // Dive underwater near Side A
-  UNDERWATER1,  // Travel underwater from Side A to Side B
-  SURFACE1,     // Surface near Side B
-  TAKEOFF2,     // Take off from water near Side B
-  HOVER,        // Perform some task - TBD
-  LAND2,        // Land on water surface near side B
-  DIVE2,        // Dive underwater near Side B
-  UNDERWATER2,  // Travel underwater from Side B to Side A
-  SURFACE2,     // Surface near Side A
-  TAKEOFF3,     // Take off from water near side A
-  FORWARD2,     // Fly forward to above starting position
-  LAND3,        // Land at starting position
+  TAKEOFF,     // Take off from start position on Side A
+  FORWARD,     // Fly forward to above pool on Side A
+  LAND,        // Land on water surface near Side A
   STOP          // End autonomous mission
 };
 
@@ -732,47 +720,23 @@ void getDesState() {
           setTargetAltitude(1.5);
           setTargetPos(0.0, 0.0);
           break;
-        case TAKEOFF1:
+        case TAKEOFF:
           if (reachedTarget()) {
             missionState = FORWARD1;
             setTargetPos(5.0, 0.0);
           }
           break;
-        case FORWARD1:
+        case FORWARD:
           if (reachedTarget()) {
             missionState = LAND1;
             setTargetAltitude(0.0);
           }
           break;
-        case LAND1:
+        case LAND:
           if (reachedTarget()) {
             missionState = STOP;
             motorsOff = true;
           }
-          break;
-        case DIVE1:
-          break;
-        case UNDERWATER1:
-          break;
-        case SURFACE1:
-          break;
-        case TAKEOFF2:
-          break;
-        case HOVER:
-          break;
-        case LAND2:
-          break;
-        case DIVE2:
-          break;
-        case UNDERWATER2:
-          break;
-        case SURFACE2:
-          break;
-        case TAKEOFF3:
-          break;
-        case FORWARD2:
-          break;
-        case LAND3:
           break;
         case STOP:
           break;
