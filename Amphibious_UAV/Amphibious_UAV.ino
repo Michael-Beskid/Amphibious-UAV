@@ -146,6 +146,7 @@ float error_roll, error_roll_prev, roll_des_prev, integral_roll, integral_roll_i
 float error_pitch, error_pitch_prev, pitch_des_prev, integral_pitch, integral_pitch_il, integral_pitch_ol, integral_pitch_prev, integral_pitch_prev_il, integral_pitch_prev_ol, derivative_pitch, pitch_PID = 0;
 float error_yaw, error_yaw_prev, integral_yaw, integral_yaw_prev, derivative_yaw, yaw_PID = 0;
 float error_altitude, error_altitude_prev, altitude_des_prev, integral_altitude, integral_altitude_prev, derivative_altitude, altitude_PID = 0;
+float error_depth, error_depth_prev, depth_des_prev, integral_depth, integral_depth_prev, derivative_depth, depth_PID = 0;
 float error_posX, error_posY, posX_control, posY_control = 0;
 
 // Mixer
@@ -196,6 +197,7 @@ enum autoStates missionState;
 // Motion Planning
 const float POS_DB_RADIUS = 0.25; // Deadband radius for evaluating reached position targets
 boolean motorsOff = false;
+boolean underwater = false;
 float altitude_des = 0.0; // mm
 float depth_des = 0.0;
 float target_posX = 0.0; // meters
@@ -252,6 +254,13 @@ float Ki_altitude = 0.2;            //Altitude I-gain
 float Kd_altitude = 0.5;            //Altitude D-gain
 float i_limit_altitude = 10000.0;   //Integrator saturation level
 
+// Depth controller variables
+// TODO: Tune these PID gains and integral saturation limit
+float Kp_depth = 1.0;            //Altitude P-gain
+float Ki_depth = 0.0;            //Altitude I-gain
+float Kd_depth = 0.0;            //Altitude D-gain
+float i_limit_depth = 100.0;   //Integrator saturation level
+
 // Position controller variables
 float Kp_position = 0.1;  // Full angle at 10m away from target
 
@@ -298,7 +307,7 @@ void setup() {
   IMUinit();
 
   // Initialize depth sensor
-  //depthSensorInit();
+  depthSensorInit();
 
   delay(5);
 
@@ -349,7 +358,7 @@ void loop() {
   //printRollPitchYaw();  //Prints roll, pitch, and yaw angles in degrees from Madgwick filter (expected: degrees, 0 when level)
   //printAltitude();      //Prints altitude measurements from ultrasonic rangefinder
   //printDepth();         //Prints depth measurements from the BlueRobotics depth sensor
-  printPosition();       // Prints X-Y position from Intel RealSense T265 Tracking Camera
+  //printPosition();      // Prints X-Y position from Intel RealSense T265 Tracking Camera
   //printPIDoutput();     //Prints computed stabilized PID variables from controller and desired setpoint (expected: ~ -1 to 1)
   //printMotorCommands(); //Prints the values being written to the motors (expected: 120 to 250)
   //printMotorCommandsScaled(); //Prints the scaled motor commands (expected: 0 to 1)
@@ -366,10 +375,12 @@ void loop() {
   
   // Get altitude (sampling at 10 Hz bc can't handle 2 kHz)
   slowLoopCounter++;
-  if (slowLoopCounter == 100) { 
-    //getDepth();   //Gets depth measurement from BlueRobotics depth sensor. This is slow (40ms according to library), might be a problem.
-  } else if (slowLoopCounter == 200) {
-    getUSdata();  //Gets altitude measurement from A0221AU ultrasonic rangefinder
+  if (slowLoopCounter == 200) {
+    if (underwater) {
+      getDepth();   //Gets depth measurement from BlueRobotics depth sensor. This is slow (40ms according to library), might be a problem.
+    } else {
+      getUSdata();  //Gets altitude measurement from A0221AU ultrasonic rangefinder
+    }
     slowLoopCounter = 0;
   }
 
@@ -461,7 +472,7 @@ void IMUinit() {
 void depthSensorInit() {
   
   Wire1.begin();
-
+  
   if (ms5837.init() == false) {
     Serial.println("MS5837 initialization unsuccessful");
     Serial.println("Check wiring or try cycling power");
@@ -711,6 +722,7 @@ void getDesState() {
       switch (manualState) {
         case MANUAL_STARTUP:
           motorsOff = false;
+          underwater = false;
           missionState = AUTO_STARTUP; // Reset AUTO mode state machine
           manualState = NORMAL;
           break;
@@ -727,6 +739,7 @@ void getDesState() {
           integral_altitude_prev = 0.0;
           error_altitude_prev = 0.0;
           motorsOff = false;
+          underwater = false;
           manualState = MANUAL_STARTUP; // Reset MANUAL mode state machine
           missionState = TAKEOFF1;      
           setTargetAltitude(1.5);
@@ -747,10 +760,16 @@ void getDesState() {
         case LAND1:
           if (reachedTarget()) {
             missionState = STOP;
+            setTargetDepth(1.0);
             motorsOff = true;
+            underwater = true;
           }
           break;
         case DIVE1:
+          if (reachedTargetUW()) {
+            motorsOff = false;
+            missionState = UNDERWATER1;
+          }
           break;
         case UNDERWATER1:
           break;
@@ -789,16 +808,27 @@ void getDesState() {
 
 void getDesStateAuto() {
 
-  // PID Altitude Controller
-  error_altitude = altitude_des - USdistance;
-  integral_altitude = integral_altitude_prev + error_altitude*dt;
-  integral_altitude = constrain(integral_altitude, -i_limit_altitude, i_limit_altitude); //Saturate integrator to prevent unsafe buildup
-  derivative_altitude = (error_altitude - error_altitude_prev)/dt; 
-  altitude_PID = 0.00005*(Kp_altitude*error_altitude + Ki_altitude*integral_altitude - Kd_altitude*derivative_altitude); //Scaled by .00005 to bring within 0 to 1 range
-
-  // Update variables
-  integral_altitude_prev = integral_altitude;
-  error_altitude_prev = error_altitude;
+  if (underwater) {
+    // PID Depth Controller
+    error_depth = depth_des - depth;
+    integral_depth = integral_depth_prev + error_depth*dt;
+    integral_depth = constrain(integral_depth, -i_limit_depth, i_limit_depth); //Saturate integrator to prevent unsafe buildup
+    derivative_depth = (error_depth - error_depth_prev)/dt; 
+    depth_PID = 0.00005*(Kp_depth*error_depth + Ki_depth*integral_depth - Kd_depth*derivative_depth); //TODO: Come up with a reasonable scaling factor to bring within 0 to 1 range
+    // Update variables
+    integral_depth_prev = integral_depth;
+    error_depth_prev = error_depth;
+  } else {
+    // PID Altitude Controller
+    error_altitude = altitude_des - USdistance;
+    integral_altitude = integral_altitude_prev + error_altitude*dt;
+    integral_altitude = constrain(integral_altitude, -i_limit_altitude, i_limit_altitude); //Saturate integrator to prevent unsafe buildup
+    derivative_altitude = (error_altitude - error_altitude_prev)/dt; 
+    altitude_PID = 0.00005*(Kp_altitude*error_altitude + Ki_altitude*integral_altitude - Kd_altitude*derivative_altitude); //Scaled by .00005 to bring within 0 to 1 range
+    // Update variables
+    integral_altitude_prev = integral_altitude;
+    error_altitude_prev = error_altitude;
+  } 
 
   // Proportional Position Controller
   error_posX = target_posX - curr_posX;
@@ -809,10 +839,8 @@ void getDesStateAuto() {
   // Set desired throttle value from altitude controller
   thro_des = hover_throttle + altitude_PID;
 
-  // TODO: Check conventions to confirm that X and Y are correctly mapped to pitch and roll axes
-
   // Set desired roll and pitch angles from position controller
-  roll_des = posY_control ; //Between -1 and 1
+  roll_des = posY_control; //Between -1 and 1
   pitch_des = posX_control; //Between -1 and 1
   yaw_des = 0;
   
@@ -1268,6 +1296,12 @@ boolean reachedTarget() {
   return abs(target_posX - curr_posX) < POS_DB_RADIUS 
     && abs(target_posY - curr_posY) < POS_DB_RADIUS
     && abs(altitude_des - USdistance) < POS_DB_RADIUS;
+}
+
+boolean reachedTargetUW() {
+  return abs(target_posX - curr_posX) < POS_DB_RADIUS 
+    && abs(target_posY - curr_posY) < POS_DB_RADIUS
+    && abs(depth_des - depth) < POS_DB_RADIUS;
 }
 
 void loopRate(int freq) {
